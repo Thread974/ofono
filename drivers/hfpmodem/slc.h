@@ -44,6 +44,11 @@ enum hfp_indicator {
 	HFP_INDICATOR_LAST
 };
 
+enum hfp_codec {
+	HFP_CODEC_CVSD = 0x01,
+	HFP_CODEC_MSBC = 0x02,
+};
+
 typedef void (*hfp_slc_cb_t)(void *userdata);
 
 struct hfp_slc_info {
@@ -53,9 +58,12 @@ struct hfp_slc_info {
 	unsigned int hf_features;
 	unsigned char cind_pos[HFP_INDICATOR_LAST];
 	unsigned int cind_val[HFP_INDICATOR_LAST];
+	unsigned char *codecs;
+	int codecs_len;
 };
 
-void hfp_slc_info_init(struct hfp_slc_info *info, guint16 version);
+void hfp_slc_info_init(struct hfp_slc_info *info, guint16 version,
+						guint8 *codecs, int len);
 void hfp_slc_info_free(struct hfp_slc_info *info);
 
 void hfp_slc_establish(struct hfp_slc_info *info, hfp_slc_cb_t connect_cb,

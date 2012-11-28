@@ -885,8 +885,7 @@ static void slc_failed(gpointer userdata)
 
 	ofono_modem_set_powered(modem, FALSE);
 
-	g_at_chat_unref(info->chat);
-	info->chat = NULL;
+	hfp_slc_info_free(info);
 }
 
 static int localhfp_enable(struct ofono_modem *modem)
@@ -896,6 +895,7 @@ static int localhfp_enable(struct ofono_modem *modem)
 	GAtSyntax *syntax;
 	GAtChat *chat;
 	const char *address;
+	unsigned char codecs[1];
 	int sk, port;
 
 	address = ofono_modem_get_string(modem, "Address");
@@ -929,7 +929,10 @@ static int localhfp_enable(struct ofono_modem *modem)
 
 	g_at_chat_set_disconnect_function(chat, slc_failed, modem);
 
-	hfp_slc_info_init(info, HFP_VERSION_LATEST);
+	memset(codecs, 0, sizeof(codecs));
+	codecs[0] = HFP_CODEC_CVSD;
+
+	hfp_slc_info_init(info, HFP_VERSION_LATEST, codecs, 1);
 	info->chat = chat;
 	hfp_slc_establish(info, slc_established, slc_failed, modem);
 
@@ -940,8 +943,7 @@ static int localhfp_disable(struct ofono_modem *modem)
 {
 	struct hfp_slc_info *info = ofono_modem_get_data(modem);
 
-	g_at_chat_unref(info->chat);
-	info->chat = NULL;
+	hfp_slc_info_free(info);
 
 	return 0;
 }

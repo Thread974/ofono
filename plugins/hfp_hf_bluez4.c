@@ -165,12 +165,15 @@ static DBusMessage *hfp_agent_new_connection(DBusConnection *conn,
 	struct ofono_modem *modem = data;
 	struct hfp_data *hfp_data = ofono_modem_get_data(modem);
 	guint16 version;
+	unsigned char codecs[1];
 
 	if (!dbus_message_get_args(msg, NULL, DBUS_TYPE_UNIX_FD, &fd,
 				DBUS_TYPE_UINT16, &version, DBUS_TYPE_INVALID))
 		return __ofono_error_invalid_args(msg);
 
-	hfp_slc_info_init(&hfp_data->info, version);
+	memset(&codecs, 0, sizeof(codecs));
+	codecs[0] = HFP_CODEC_CVSD;
+	hfp_slc_info_init(&hfp_data->info, version, codecs, 1);
 
 	err = service_level_connection(modem, fd);
 	if (err < 0 && err != -EINPROGRESS)
