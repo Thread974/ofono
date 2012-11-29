@@ -169,11 +169,34 @@ static void transport_append_properties(DBusMessageIter *iter,
 static DBusMessage *acquire(DBusConnection *conn, DBusMessage *msg,
 							void *user_data)
 {
-	DBG("");
+	struct media_transport *transport = user_data;
+	struct media_endpoint *endpoint = transport->endpoint;
+	const char *sender;
+	guint16 imtu, omtu;
+	int fd;
 
-	return g_dbus_create_error(msg, ERROR_INTERFACE
-					".NotImplemented",
-					"Implementation not provided");
+	sender = dbus_message_get_sender(msg);
+
+	if (!g_str_equal(sender, endpoint->owner))
+		return g_dbus_create_error(msg, ERROR_INTERFACE
+						".NotAuthorized",
+						"Operation not authorized");
+
+	if (transport->state == STATE_ACTIVE)
+		return g_dbus_create_error(msg, ERROR_INTERFACE
+					".InProgress",
+					"Operation already in progress");
+
+	transport->state = STATE_ACTIVE;
+
+	fd = g_io_channel_unix_get_fd(transport->io);
+	imtu = 48;
+	omtu = 48;
+
+	return g_dbus_create_reply(msg, DBUS_TYPE_UNIX_FD, &fd,
+					DBUS_TYPE_UINT16, &imtu,
+					DBUS_TYPE_UINT16, &omtu,
+					DBUS_TYPE_INVALID);
 }
 
 static DBusMessage *try_acquire(DBusConnection *conn, DBusMessage *msg,
