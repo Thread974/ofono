@@ -35,6 +35,7 @@
 
 #define MEDIA_ENDPOINT_INTERFACE	"org.bluez.MediaEndpoint1"
 #define MEDIA_TRANSPORT_INTERFACE	"org.bluez.MediaTransport1"
+#define ERROR_INTERFACE			"org.bluez.Error"
 
 struct media_endpoint {
 	char *owner;
@@ -122,6 +123,49 @@ static void transport_append_properties(DBusMessageIter *iter,
 	dbus_message_iter_close_container(iter, &dict);
 }
 
+static DBusMessage *acquire(DBusConnection *conn, DBusMessage *msg,
+							void *user_data)
+{
+	DBG("");
+
+	return g_dbus_create_error(msg, ERROR_INTERFACE
+					".NotImplemented",
+					"Implementation not provided");
+}
+
+static DBusMessage *try_acquire(DBusConnection *conn, DBusMessage *msg,
+							void *user_data)
+{
+	DBG("");
+
+	return g_dbus_create_error(msg, ERROR_INTERFACE
+					".NotImplemented",
+					"Implementation not provided");
+}
+
+static DBusMessage *release(DBusConnection *conn, DBusMessage *msg,
+							void *user_data)
+{
+	DBG("");
+
+	return g_dbus_create_error(msg, ERROR_INTERFACE
+					".NotImplemented",
+					"Implementation not provided");
+}
+
+static const GDBusMethodTable transport_methods[] = {
+	{ GDBUS_ASYNC_METHOD("Acquire",
+			NULL, GDBUS_ARGS({ "fd", "h" }, { "mtu_r", "q" },
+							{ "mtu_w", "q" } ),
+			acquire) },
+	{ GDBUS_ASYNC_METHOD("TryAcquire",
+			NULL, GDBUS_ARGS({ "fd", "h" }, { "mtu_r", "q" },
+							{ "mtu_w", "q" } ),
+			try_acquire) },
+	{ GDBUS_METHOD("Release", NULL, NULL, release) },
+	{ },
+};
+
 int media_transport_register(struct media_transport *transport,
 					DBusPendingCallNotifyFunction cb,
 					gpointer user_data)
@@ -130,14 +174,22 @@ int media_transport_register(struct media_transport *transport,
 	DBusMessage *msg;
 	DBusMessageIter iter;
 	DBusPendingCall *c;
+	DBusConnection *conn = ofono_dbus_get_connection();
 
-	/* Register transport object */
+	if (g_dbus_register_interface(conn, transport->path,
+				MEDIA_TRANSPORT_INTERFACE, transport_methods,
+				NULL, NULL, transport, NULL) == FALSE) {
+		ofono_error("Could not register transport %s", transport->path);
+		return -EIO;
+	}
 
 	msg = dbus_message_new_method_call(endpoint->owner, endpoint->path,
 						MEDIA_ENDPOINT_INTERFACE,
 						"SetConfiguration");
 	if (msg == NULL) {
 		ofono_error("Couldn't allocate D-Bus message");
+		g_dbus_unregister_interface(conn, transport->path,
+						MEDIA_TRANSPORT_INTERFACE);
 		return -ENOMEM;
 	}
 
@@ -148,9 +200,10 @@ int media_transport_register(struct media_transport *transport,
 
 	transport_append_properties(&iter, transport);
 
-	if (!dbus_connection_send_with_reply(ofono_dbus_get_connection(),
-								msg, &c, -1)) {
+	if (!dbus_connection_send_with_reply(conn, msg, &c, -1)) {
 		ofono_error("Sending SetConfiguration failed");
+		g_dbus_unregister_interface(conn, transport->path,
+						MEDIA_TRANSPORT_INTERFACE);
 		dbus_message_unref(msg);
 		return -EIO;
 	}
