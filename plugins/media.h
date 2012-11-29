@@ -20,6 +20,7 @@
  */
 
 struct media_endpoint;
+struct media_transport;
 
 struct media_endpoint *media_endpoint_new(const char *owner,
 					const char *path,
@@ -27,3 +28,14 @@ struct media_endpoint *media_endpoint_new(const char *owner,
 					GArray *capabilities);
 
 void media_endpoint_free(gpointer data);
+
+struct media_transport *media_transport_new(int id, const char *device,
+					struct media_endpoint *endpoint);
+
+void media_transport_free(struct media_transport *transport);
+
+int media_transport_register(struct media_transport *transport,
+					DBusPendingCallNotifyFunction cb,
+					gpointer user_data);
+
+void media_transport_unregister(struct media_transport *transport);
