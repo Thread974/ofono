@@ -173,8 +173,9 @@ static DBusMessage *handsfree_get_properties(DBusConnection *conn,
 				&voice_recognition);
 
 	features = ag_features_list(hf->ag_features);
-	ofono_dbus_dict_append_array(&dict, "Features", DBUS_TYPE_STRING,
-					&features);
+	ofono_dbus_dict_append_array(&dict, "Features",
+					DBUS_TYPE_STRING, &features,
+					g_strv_length((gchar **) features));
 
 	ofono_dbus_dict_append(&dict, "BatteryChargeLevel", DBUS_TYPE_BYTE,
 				&hf->battchg);

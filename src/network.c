@@ -353,7 +353,8 @@ static void set_network_operator_techs(struct network_operator_data *opd,
 	ofono_dbus_signal_array_property_changed(conn, path,
 					OFONO_NETWORK_REGISTRATION_INTERFACE,
 					"Technologies", DBUS_TYPE_STRING,
-					&technologies);
+					&technologies,
+					g_strv_length(technologies));
 	g_strfreev(technologies);
 }
 
@@ -560,7 +561,8 @@ static void append_operator_properties(struct network_operator_data *opd,
 
 		ofono_dbus_dict_append_array(dict, "Technologies",
 						DBUS_TYPE_STRING,
-						&technologies);
+						&technologies,
+						g_strv_length(technologies));
 
 		g_strfreev(technologies);
 	}

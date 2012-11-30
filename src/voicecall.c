@@ -1348,7 +1348,7 @@ static DBusMessage *manager_get_properties(DBusConnection *conn,
 		list[i] = key;
 
 	ofono_dbus_dict_append_array(&dict, "EmergencyNumbers",
-					DBUS_TYPE_STRING, &list);
+					DBUS_TYPE_STRING, &list, i);
 	g_free(list);
 
 	dbus_message_iter_close_container(&iter, &dict);
@@ -2451,7 +2451,7 @@ static void emit_en_list_changed(struct ofono_voicecall *vc)
 
 	ofono_dbus_signal_array_property_changed(conn, path,
 				OFONO_VOICECALL_MANAGER_INTERFACE,
-				"EmergencyNumbers", DBUS_TYPE_STRING, &list);
+				"EmergencyNumbers", DBUS_TYPE_STRING, &list, i);
 
 	g_free(list);
 }

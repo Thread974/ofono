@@ -392,12 +392,14 @@ static DBusMessage *sim_get_properties(DBusConnection *conn,
 	own_numbers = get_own_numbers(sim->own_numbers);
 
 	ofono_dbus_dict_append_array(&dict, "SubscriberNumbers",
-					DBUS_TYPE_STRING, &own_numbers);
+				DBUS_TYPE_STRING, &own_numbers,
+				g_strv_length(own_numbers));
 	g_strfreev(own_numbers);
 
 	locked_pins = get_locked_pins(sim);
 	ofono_dbus_dict_append_array(&dict, "LockedPins",
-					DBUS_TYPE_STRING, &locked_pins);
+				DBUS_TYPE_STRING, &locked_pins,
+				g_strv_length(locked_pins));
 	g_strfreev(locked_pins);
 
 	if (sim->service_numbers && sim->sdn_ready) {
@@ -411,8 +413,9 @@ static DBusMessage *sim_get_properties(DBusConnection *conn,
 
 	if (sim->language_prefs)
 		ofono_dbus_dict_append_array(&dict, "PreferredLanguages",
-						DBUS_TYPE_STRING,
-						&sim->language_prefs);
+					DBUS_TYPE_STRING,
+					&sim->language_prefs,
+					g_strv_length(sim->language_prefs));
 
 	pin_name = sim_passwd_name(sim->pin_type);
 	ofono_dbus_dict_append(&dict, "PinRequired",
@@ -636,7 +639,8 @@ static void sim_locked_cb(struct ofono_sim *sim, gboolean locked)
 	ofono_dbus_signal_array_property_changed(conn, path,
 						OFONO_SIM_MANAGER_INTERFACE,
 						"LockedPins", DBUS_TYPE_STRING,
-						&locked_pins);
+						&locked_pins,
+						g_strv_length(locked_pins));
 	g_strfreev(locked_pins);
 
 	sim_pin_retries_check(sim);
@@ -1189,7 +1193,8 @@ check:
 		ofono_dbus_signal_array_property_changed(conn, path,
 						OFONO_SIM_MANAGER_INTERFACE,
 						"SubscriberNumbers",
-						DBUS_TYPE_STRING, &own_numbers);
+						DBUS_TYPE_STRING, &own_numbers,
+						g_strv_length(own_numbers));
 
 		g_strfreev(own_numbers);
 	} else {
@@ -2022,10 +2027,11 @@ skip_efpl:
 
 	if (sim->language_prefs != NULL)
 		ofono_dbus_signal_array_property_changed(conn, path,
-						OFONO_SIM_MANAGER_INTERFACE,
-						"PreferredLanguages",
-						DBUS_TYPE_STRING,
-						&sim->language_prefs);
+					OFONO_SIM_MANAGER_INTERFACE,
+					"PreferredLanguages",
+					DBUS_TYPE_STRING,
+					&sim->language_prefs,
+					g_strv_length(sim->language_prefs));
 
 	/* Proceed with sim initialization if we're not merely updating */
 	if (!sim->language_prefs_update)

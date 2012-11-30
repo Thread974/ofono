@@ -164,7 +164,8 @@ static void cdma_connman_settings_append_variant(
 	if (settings->dns)
 		ofono_dbus_dict_append_array(&array, "DomainNameServers",
 						DBUS_TYPE_STRING,
-						&settings->dns);
+						&settings->dns,
+						g_strv_length(settings->dns));
 
 done:
 	dbus_message_iter_close_container(&variant, &array);

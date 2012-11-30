@@ -85,27 +85,30 @@ void ofono_dbus_dict_append(DBusMessageIter *dict,
 	dbus_message_iter_close_container(dict, &keyiter);
 }
 
-static void append_array_variant(DBusMessageIter *iter, int type, void *val)
+static void append_array_variant(DBusMessageIter *iter, int type, void *val,
+							int n_elements)
 {
 	DBusMessageIter variant, array;
-	char typesig[2];
-	char arraysig[3];
-	const char **str_array = *(const char ***) val;
-	int i;
-
-	arraysig[0] = DBUS_TYPE_ARRAY;
-	arraysig[1] = typesig[0] = type;
-	arraysig[2] = typesig[1] = '\0';
+	char type_sig[2] = { type, '\0' };
+	char array_sig[3] = { DBUS_TYPE_ARRAY, type, '\0' };
 
 	dbus_message_iter_open_container(iter, DBUS_TYPE_VARIANT,
-						arraysig, &variant);
+						array_sig, &variant);
 
 	dbus_message_iter_open_container(&variant, DBUS_TYPE_ARRAY,
-						typesig, &array);
+						type_sig, &array);
 
-	for (i = 0; str_array[i]; i++)
-		dbus_message_iter_append_basic(&array, type,
-						&(str_array[i]));
+	if (dbus_type_is_fixed(type) == TRUE) {
+		dbus_message_iter_append_fixed_array(&array, type, val,
+							n_elements);
+	} else if (type == DBUS_TYPE_STRING || type == DBUS_TYPE_OBJECT_PATH) {
+		const char ***str_array = val;
+		int i;
+
+		for (i = 0; i < n_elements; i++)
+			dbus_message_iter_append_basic(&array, type,
+							&((*str_array)[i]));
+	}
 
 	dbus_message_iter_close_container(&variant, &array);
 
@@ -113,7 +116,7 @@ static void append_array_variant(DBusMessageIter *iter, int type, void *val)
 }
 
 void ofono_dbus_dict_append_array(DBusMessageIter *dict, const char *key,
-				int type, void *val)
+				int type, void *val, int n_elements)
 {
 	DBusMessageIter entry;
 
@@ -122,7 +125,7 @@ void ofono_dbus_dict_append_array(DBusMessageIter *dict, const char *key,
 
 	dbus_message_iter_append_basic(&entry, DBUS_TYPE_STRING, &key);
 
-	append_array_variant(&entry, type, val);
+	append_array_variant(&entry, type, val, n_elements);
 
 	dbus_message_iter_close_container(dict, &entry);
 }
@@ -225,7 +228,8 @@ int ofono_dbus_signal_array_property_changed(DBusConnection *conn,
 						const char *path,
 						const char *interface,
 						const char *name,
-						int type, void *value)
+						int type, void *value,
+						int n_elements)
 
 {
 	DBusMessage *signal;
@@ -242,7 +246,7 @@ int ofono_dbus_signal_array_property_changed(DBusConnection *conn,
 
 	dbus_message_iter_append_basic(&iter, DBUS_TYPE_STRING, &name);
 
-	append_array_variant(&iter, type, value);
+	append_array_variant(&iter, type, value, n_elements);
 
 	return g_dbus_send_message(conn, signal);
 }
