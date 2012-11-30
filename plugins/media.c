@@ -37,6 +37,12 @@
 #define MEDIA_TRANSPORT_INTERFACE	"org.bluez.MediaTransport1"
 #define ERROR_INTERFACE			"org.bluez.Error"
 
+enum transport_state {
+	STATE_IDLE,
+	STATE_PENDING,
+	STATE_ACTIVE
+};
+
 struct media_endpoint {
 	char *owner;
 	char *path;
@@ -47,6 +53,7 @@ struct media_endpoint {
 struct media_transport {
 	char *path;
 	char *device_path;
+	enum transport_state state;
 	struct media_endpoint *endpoint;
 };
 
@@ -87,6 +94,7 @@ struct media_transport *media_transport_new(int id, const char *device,
 	transport->device_path = g_strdup(device);
 	/* Missing refcounting */
 	transport->endpoint = endpoint;
+	transport->state = STATE_IDLE;
 
 	return transport;
 }
@@ -98,11 +106,26 @@ void media_transport_free(struct media_transport *transport)
 	g_free(transport);
 }
 
+static const char *state2str(enum transport_state state)
+{
+	switch(state) {
+	case STATE_IDLE:
+		return "idle";
+	case STATE_PENDING:
+		return "pending";
+	case STATE_ACTIVE:
+		return "active";
+	}
+
+	return "idle";
+}
+
 static void transport_append_properties(DBusMessageIter *iter,
 					struct media_transport *transport)
 {
 	DBusMessageIter dict;
 	struct media_endpoint *endpoint = transport->endpoint;
+	const char *str;
 
 	dbus_message_iter_open_container(iter, DBUS_TYPE_ARRAY,
 			DBUS_DICT_ENTRY_BEGIN_CHAR_AS_STRING
@@ -114,6 +137,9 @@ static void transport_append_properties(DBusMessageIter *iter,
 
 	ofono_dbus_dict_append(&dict, "Codec", DBUS_TYPE_BYTE,
 						&endpoint->codec);
+
+	str = state2str(transport->state);
+	ofono_dbus_dict_append(&dict, "State", DBUS_TYPE_STRING, &str);
 
 	if (endpoint->capabilities)
 		ofono_dbus_dict_append_array(&dict, "Configuration",
@@ -136,7 +162,11 @@ static DBusMessage *acquire(DBusConnection *conn, DBusMessage *msg,
 static DBusMessage *try_acquire(DBusConnection *conn, DBusMessage *msg,
 							void *user_data)
 {
+	struct media_transport *transport = user_data;
+
 	DBG("");
+
+	transport->state = STATE_ACTIVE;
 
 	return g_dbus_create_error(msg, ERROR_INTERFACE
 					".NotImplemented",
@@ -146,7 +176,11 @@ static DBusMessage *try_acquire(DBusConnection *conn, DBusMessage *msg,
 static DBusMessage *release(DBusConnection *conn, DBusMessage *msg,
 							void *user_data)
 {
+	struct media_transport *transport = user_data;
+
 	DBG("");
+
+	transport->state = STATE_IDLE;
 
 	return g_dbus_create_error(msg, ERROR_INTERFACE
 					".NotImplemented",
