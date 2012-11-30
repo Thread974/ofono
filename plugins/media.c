@@ -31,6 +31,7 @@
 #include <ofono/log.h>
 #include <ofono/dbus.h>
 
+#include "bluez5.h"
 #include "media.h"
 
 #define MEDIA_ENDPOINT_INTERFACE	"org.bluez.MediaEndpoint1"
@@ -47,6 +48,7 @@ struct media_endpoint {
 	char *owner;
 	char *path;
 	guint8 codec;
+	char *uuid;
 	GArray *capabilities;
 };
 
@@ -68,6 +70,8 @@ struct media_endpoint *media_endpoint_new(const char *owner,
 	endpoint->owner = g_strdup(owner);
 	endpoint->path = g_strdup(path);
 	endpoint->codec = codec;
+	endpoint->uuid = g_strdup(HFP_HS_UUID);
+
 	if (capabilities)
 		endpoint->capabilities = g_array_ref(capabilities);
 
@@ -80,6 +84,7 @@ void media_endpoint_free(gpointer data)
 
 	g_free(endpoint->owner);
 	g_free(endpoint->path);
+	g_free(endpoint->uuid);
 	g_array_unref(endpoint->capabilities);
 	g_free(endpoint);
 }
@@ -140,6 +145,9 @@ static void transport_append_properties(DBusMessageIter *iter,
 
 	str = state2str(transport->state);
 	ofono_dbus_dict_append(&dict, "State", DBUS_TYPE_STRING, &str);
+
+	ofono_dbus_dict_append(&dict, "UUID", DBUS_TYPE_STRING,
+							&endpoint->uuid);
 
 	if (endpoint->capabilities)
 		ofono_dbus_dict_append_array(&dict, "Configuration",
