@@ -34,7 +34,8 @@ void media_endpoint_unref(struct media_endpoint *endpoint);
 struct media_transport *media_transport_new(int id, const char *device,
 					struct media_endpoint *endpoint);
 
-void media_transport_free(struct media_transport *transport);
+struct media_transport *media_transport_ref(struct media_transport *transport);
+void media_transport_unref(struct media_transport *transport);
 
 int media_transport_register(struct media_transport *transport,
 					DBusPendingCallNotifyFunction cb,

@@ -194,7 +194,7 @@ static void slc_established(gpointer userdata)
 	hfp->transport = media_transport_new(fd, hfp->device_path, endpoint);
 	if (media_transport_register(hfp->transport, transport_registered_cb,
 								hfp) < 0) {
-		media_transport_free(hfp->transport);
+		media_transport_unref(hfp->transport);
 		hfp->transport = NULL;
 		return;
 	}
@@ -220,7 +220,7 @@ static void slc_failed(gpointer userdata)
 	hfp_slc_info_free(&hfp->info);
 
 	media_transport_unregister(hfp->transport);
-	media_transport_free(hfp->transport);
+	media_transport_unref(hfp->transport);
 	hfp->transport = NULL;
 }
 

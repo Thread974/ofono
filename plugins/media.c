@@ -54,6 +54,7 @@ struct media_endpoint {
 };
 
 struct media_transport {
+	gint ref;
 	char *path;
 	char *device_path;
 	guint watch;
@@ -104,22 +105,21 @@ struct media_endpoint *media_endpoint_new(const char *owner,
 	return media_endpoint_ref(endpoint);
 }
 
-struct media_transport *media_transport_new(int id, const char *device,
-						struct media_endpoint *endpoint)
+struct media_transport *media_transport_ref(struct media_transport *transport)
 {
-	struct media_transport *transport;
+	if (transport == NULL)
+		return NULL;
 
-	transport = g_new0(struct media_transport, 1);
-	transport->path = g_strdup_printf("%s/%d", device, id);
-	transport->device_path = g_strdup(device);
-	transport->endpoint = media_endpoint_ref(endpoint);
-	transport->state = STATE_IDLE;
+	g_atomic_int_inc(&transport->ref);
 
 	return transport;
 }
 
-void media_transport_free(struct media_transport *transport)
+void media_transport_unref(struct media_transport *transport)
 {
+	if (g_atomic_int_dec_and_test(&transport->ref) == FALSE)
+		return;
+
 	g_free(transport->device_path);
 	g_free(transport->path);
 
@@ -133,6 +133,21 @@ void media_transport_free(struct media_transport *transport)
 		g_io_channel_unref(transport->io);
 
 	g_free(transport);
+}
+
+struct media_transport *media_transport_new(int id, const char *device,
+						struct media_endpoint *endpoint)
+
+{
+	struct media_transport *transport;
+
+	transport = g_new0(struct media_transport, 1);
+	transport->path = g_strdup_printf("%s/%d", device, id);
+	transport->device_path = g_strdup(device);
+	transport->endpoint = media_endpoint_ref(endpoint);
+	transport->state = STATE_IDLE;
+
+	return media_transport_ref(transport);
 }
 
 static const char *state2str(enum transport_state state)
