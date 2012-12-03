@@ -227,6 +227,71 @@ static DBusMessage *release(DBusConnection *conn, DBusMessage *msg,
 					"Implementation not provided");
 }
 
+static gboolean transport_property_get_device(const GDBusPropertyTable *prop,
+					DBusMessageIter *iter, void *data)
+{
+	struct media_transport *transport = data;
+
+	dbus_message_iter_append_basic(iter,
+			DBUS_TYPE_OBJECT_PATH, &transport->device_path);
+
+	return TRUE;
+}
+
+static gboolean transport_property_get_uuid(const GDBusPropertyTable *prop,
+					DBusMessageIter *iter, void *data)
+{
+	struct media_transport *transport = data;
+	struct media_endpoint *endpoint = transport->endpoint;
+
+	dbus_message_iter_append_basic(iter,
+					DBUS_TYPE_STRING, &endpoint->uuid);
+
+	return TRUE;
+}
+
+static gboolean transport_property_get_codec(const GDBusPropertyTable *prop,
+					DBusMessageIter *iter, void *data)
+{
+	struct media_transport *transport = data;
+	struct media_endpoint *endpoint = transport->endpoint;
+
+	dbus_message_iter_append_basic(iter, DBUS_TYPE_BYTE, &endpoint->codec);
+
+	return TRUE;
+}
+
+static gboolean transport_property_get_config(const GDBusPropertyTable *prop,
+					DBusMessageIter *iter, void *data)
+{
+	struct media_transport *transport = data;
+	struct media_endpoint *endpoint = transport->endpoint;
+	DBusMessageIter array;
+
+	dbus_message_iter_open_container(iter, DBUS_TYPE_ARRAY,
+					DBUS_TYPE_BYTE_AS_STRING, &array);
+
+	if (endpoint->capabilities)
+		dbus_message_iter_append_fixed_array(&array, DBUS_TYPE_BYTE,
+						&endpoint->capabilities->data,
+						endpoint->capabilities->len);
+
+	dbus_message_iter_close_container(iter, &array);
+
+	return TRUE;
+}
+
+static gboolean transport_property_get_state(const GDBusPropertyTable *prop,
+					DBusMessageIter *iter, void *data)
+{
+	struct media_transport *transport = data;
+	const char *state = state2str(transport->state);
+
+	dbus_message_iter_append_basic(iter, DBUS_TYPE_STRING, &state);
+
+	return TRUE;
+}
+
 static const GDBusMethodTable transport_methods[] = {
 	{ GDBUS_ASYNC_METHOD("Acquire",
 			NULL, GDBUS_ARGS({ "fd", "h" }, { "mtu_r", "q" },
@@ -238,6 +303,15 @@ static const GDBusMethodTable transport_methods[] = {
 			try_acquire) },
 	{ GDBUS_METHOD("Release", NULL, NULL, release) },
 	{ },
+};
+
+static const GDBusPropertyTable transport_properties[] = {
+	{ "Device", "o", transport_property_get_device },
+	{ "UUID", "s", transport_property_get_uuid },
+	{ "Codec", "y", transport_property_get_codec },
+	{ "Configuration", "ay", transport_property_get_config },
+	{ "State", "s", transport_property_get_state },
+	{ }
 };
 
 int media_transport_register(struct media_transport *transport,
@@ -252,7 +326,8 @@ int media_transport_register(struct media_transport *transport,
 
 	if (g_dbus_register_interface(conn, transport->path,
 				MEDIA_TRANSPORT_INTERFACE, transport_methods,
-				NULL, NULL, transport, NULL) == FALSE) {
+				NULL, transport_properties,
+				transport, NULL) == FALSE) {
 		ofono_error("Could not register transport %s", transport->path);
 		return -EIO;
 	}
