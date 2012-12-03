@@ -45,6 +45,7 @@ enum transport_state {
 };
 
 struct media_endpoint {
+	gint ref;
 	char *owner;
 	char *path;
 	guint8 codec;
@@ -60,6 +61,29 @@ struct media_transport {
 	enum transport_state state;
 	struct media_endpoint *endpoint;
 };
+
+struct media_endpoint *media_endpoint_ref(struct media_endpoint *endpoint)
+{
+	if (endpoint == NULL)
+		return NULL;
+
+	g_atomic_int_inc(&endpoint->ref);
+
+	return endpoint;
+}
+
+void media_endpoint_unref(struct media_endpoint *endpoint)
+{
+	if (g_atomic_int_dec_and_test(&endpoint->ref) == FALSE)
+		return;
+
+	g_free(endpoint->owner);
+	g_free(endpoint->path);
+	g_free(endpoint->uuid);
+	if (endpoint->capabilities)
+		g_array_unref(endpoint->capabilities);
+	g_free(endpoint);
+}
 
 struct media_endpoint *media_endpoint_new(const char *owner,
 					const char *path,
@@ -77,18 +101,7 @@ struct media_endpoint *media_endpoint_new(const char *owner,
 	if (capabilities)
 		endpoint->capabilities = g_array_ref(capabilities);
 
-	return endpoint;
-}
-
-void media_endpoint_free(gpointer data)
-{
-	struct media_endpoint *endpoint = data;
-
-	g_free(endpoint->owner);
-	g_free(endpoint->path);
-	g_free(endpoint->uuid);
-	g_array_unref(endpoint->capabilities);
-	g_free(endpoint);
+	return media_endpoint_ref(endpoint);
 }
 
 struct media_transport *media_transport_new(int id, const char *device,
@@ -99,8 +112,7 @@ struct media_transport *media_transport_new(int id, const char *device,
 	transport = g_new0(struct media_transport, 1);
 	transport->path = g_strdup_printf("%s/%d", device, id);
 	transport->device_path = g_strdup(device);
-	/* Missing refcounting */
-	transport->endpoint = endpoint;
+	transport->endpoint = media_endpoint_ref(endpoint);
 	transport->state = STATE_IDLE;
 
 	return transport;
@@ -110,6 +122,9 @@ void media_transport_free(struct media_transport *transport)
 {
 	g_free(transport->device_path);
 	g_free(transport->path);
+
+	if (transport->endpoint)
+		media_endpoint_unref(transport->endpoint);
 
 	if (transport->watch)
 		g_source_remove(transport->watch);
