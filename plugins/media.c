@@ -429,7 +429,28 @@ int media_transport_register(struct media_transport *transport,
 
 void media_transport_unregister(struct media_transport *transport)
 {
-	/* ClearConfiguration */
+	struct media_endpoint *endpoint = transport->endpoint;
+	DBusConnection *conn = ofono_dbus_get_connection();
+	DBusMessage *msg;
+	DBusMessageIter iter;
+
+	msg = dbus_message_new_method_call(endpoint->owner, endpoint->path,
+						MEDIA_ENDPOINT_INTERFACE,
+						"ClearConfiguration");
+	if (msg == NULL) {
+		ofono_error("Couldn't allocate D-Bus message");
+		return;
+	}
+
+	dbus_message_iter_init_append(msg, &iter);
+
+	dbus_message_iter_append_basic(&iter, DBUS_TYPE_OBJECT_PATH,
+							&transport->path);
+
+	g_dbus_send_message(conn, msg);
+
+	g_dbus_unregister_interface(conn, transport->path,
+					MEDIA_TRANSPORT_INTERFACE);
 }
 
 static gboolean channel_watch(GIOChannel *io, GIOCondition cond, gpointer user_data)
