@@ -196,14 +196,27 @@ static void transport_append_properties(DBusMessageIter *iter,
 	dbus_message_iter_close_container(iter, &dict);
 }
 
+static DBusMessage *acquire_message(DBusMessage *msg, GIOChannel *io)
+{
+	guint16 imtu, omtu;
+	int fd;
+
+	fd = g_io_channel_unix_get_fd(io);
+	imtu = 48;
+	omtu = 48;
+
+	return g_dbus_create_reply(msg, DBUS_TYPE_UNIX_FD, &fd,
+					DBUS_TYPE_UINT16, &imtu,
+					DBUS_TYPE_UINT16, &omtu,
+					DBUS_TYPE_INVALID);
+}
+
 static DBusMessage *acquire(DBusConnection *conn, DBusMessage *msg,
 							void *user_data)
 {
 	struct media_transport *transport = user_data;
 	struct media_endpoint *endpoint = transport->endpoint;
 	const char *sender;
-	guint16 imtu, omtu;
-	int fd;
 
 	sender = dbus_message_get_sender(msg);
 
@@ -218,29 +231,39 @@ static DBusMessage *acquire(DBusConnection *conn, DBusMessage *msg,
 					"Operation already in progress");
 
 	transport->state = STATE_ACTIVE;
-
-	fd = g_io_channel_unix_get_fd(transport->io);
-	imtu = 48;
-	omtu = 48;
-
-	return g_dbus_create_reply(msg, DBUS_TYPE_UNIX_FD, &fd,
-					DBUS_TYPE_UINT16, &imtu,
-					DBUS_TYPE_UINT16, &omtu,
-					DBUS_TYPE_INVALID);
+	return acquire_message(msg, transport->io);
 }
 
 static DBusMessage *try_acquire(DBusConnection *conn, DBusMessage *msg,
 							void *user_data)
 {
 	struct media_transport *transport = user_data;
+	struct media_endpoint *endpoint = transport->endpoint;
 
-	DBG("");
+	const char *sender;
 
-	transport->state = STATE_ACTIVE;
+	sender = dbus_message_get_sender(msg);
+
+	DBG("sender %s owner %s", sender, endpoint->owner);
+
+	if (!g_str_equal(sender, endpoint->owner))
+		return g_dbus_create_error(msg, ERROR_INTERFACE
+						".NotAuthorized",
+						"Operation not authorized");
+
+	if (transport->state == STATE_ACTIVE)
+		return g_dbus_create_error(msg, ERROR_INTERFACE
+					".InProgress",
+					"Operation already in progress");
+
+	if (transport->state == STATE_PENDING) {
+		transport->state = STATE_ACTIVE;
+		return acquire_message(msg, transport->io);
+	}
 
 	return g_dbus_create_error(msg, ERROR_INTERFACE
-					".NotImplemented",
-					"Implementation not provided");
+						".NotAvailable",
+						"Transport not ready");
 }
 
 static DBusMessage *release(DBusConnection *conn, DBusMessage *msg,
