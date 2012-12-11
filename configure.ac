@@ -176,12 +176,16 @@ AC_ARG_ENABLE(bluetooth, AC_HELP_STRING([--disable-bluetooth],
 				[disable Bluetooth modem support]),
 					[enable_bluetooth=${enableval}])
 if (test "${enable_bluetooth}" != "no"); then
-	PKG_CHECK_MODULES(BLUEZ, bluez >= 4.99, dummy=yes,
-			AC_MSG_ERROR(Bluetooth library >= 4.99 is required))
+	PKG_CHECK_MODULES(BLUEZ, bluez >= 4.99 bluez < 5,
+			  enable_bluez4=yes enable_bluez5=yes
+			  AC_MSG_NOTICE(Enabling BLUEZ 4 and BlueZ 5),
+			  enable_bluez4=no enable_bluez5=yes
+			  AC_MSG_NOTICE(Enabling BLUEZ 5))
 fi
 AC_SUBST(BLUEZ_CFLAGS)
 AC_SUBST(BLUEZ_LIBS)
-AM_CONDITIONAL(BLUETOOTH, test "${enable_bluetooth}" != "no")
+AM_CONDITIONAL(BLUEZ4, test "${enable_bluez4}" != "no")
+AM_CONDITIONAL(BLUEZ5, test "${enable_bluez5}" != "no")
 
 AC_ARG_WITH([provisiondb], AC_HELP_STRING([--with-provisiondb=FILE],
 	[location of provision database]), [path_provisiondb=${withval}])

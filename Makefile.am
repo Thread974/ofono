@@ -407,7 +407,7 @@ builtin_sources += plugins/samsung.c
 builtin_modules += sim900
 builtin_sources += plugins/sim900.c
 
-if BLUETOOTH
+if BLUEZ4
 builtin_modules += bluetooth
 builtin_sources += plugins/bluetooth.c plugins/bluetooth.h
 
@@ -742,6 +742,7 @@ tools_stktest_LDADD = @GLIB_LIBS@ @DBUS_LIBS@
 endif
 endif
 
+if BLUEZ4
 if DUNDEE
 sbin_PROGRAMS += dundee/dundee
 
@@ -757,6 +758,7 @@ dist_dbusconf_DATA += dundee/dundee.conf
 
 if SYSTEMD
 systemdunit_DATA += dundee/dundee.service
+endif
 endif
 endif
 
