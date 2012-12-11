@@ -407,6 +407,11 @@ builtin_sources += plugins/samsung.c
 builtin_modules += sim900
 builtin_sources += plugins/sim900.c
 
+if BLUEZ5
+builtin_modules += bluez5
+builtin_sources += plugins/bluez5.c
+endif
+
 if BLUEZ4
 builtin_modules += bluez4
 builtin_sources += plugins/bluez4.c plugins/bluez4.h
