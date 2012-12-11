@@ -410,6 +410,9 @@ builtin_sources += plugins/sim900.c
 if BLUEZ5
 builtin_modules += bluez5
 builtin_sources += plugins/bluez5.c
+
+builtin_modules += hfp_bluez5
+builtin_sources += plugins/hfp_hf_bluez5.c
 endif
 
 if BLUEZ4
