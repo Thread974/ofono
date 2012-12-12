@@ -19,16 +19,44 @@
  *
  */
 
-#define	BLUEZ_SERVICE "org.bluez"
-#define BLUEZ_PROFILE_INTERFACE		BLUEZ_SERVICE ".Profile1"
-#define BLUEZ_ERROR_INTERFACE		BLUEZ_SERVICE ".Error"
+#ifdef HAVE_CONFIG_H
+#include <config.h>
+#endif
 
-#define HFP_HS_UUID	"0000111e-0000-1000-8000-00805f9b34fb"
+#include <glib.h>
 
-int bluetooth_register_profile(DBusConnection *conn, const char *uuid,
-					const char *name, const char *object);
+#include "media.h"
 
-void bluetooth_unregister_profile(DBusConnection *conn, const char *object);
+struct media_endpoint {
+	char *owner;
+	char *path;
+	guint8 codec;
+	GArray *capabilities;
+};
 
-void bluetooth_iter_parse_properties(DBusMessageIter *array,
-						const char *property, ...);
+struct media_endpoint *media_endpoint_new(const char *owner,
+					const char *path,
+					guint8 codec,
+					GArray *capabilities)
+{
+	struct media_endpoint *endpoint;
+
+	endpoint = g_new0(struct media_endpoint, 1);
+	endpoint->owner = g_strdup(owner);
+	endpoint->path = g_strdup(path);
+	endpoint->codec = codec;
+	if (capabilities)
+		endpoint->capabilities = g_array_ref(capabilities);
+
+	return endpoint;
+}
+
+void media_endpoint_free(gpointer data)
+{
+	struct media_endpoint *endpoint = data;
+
+	g_free(endpoint->owner);
+	g_free(endpoint->path);
+	g_array_unref(endpoint->capabilities);
+	g_free(endpoint);
+}

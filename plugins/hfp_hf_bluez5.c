@@ -35,12 +35,114 @@
 #include <ofono/log.h>
 
 #include "bluez5.h"
+#include "media.h"
 
 #ifndef DBUS_TYPE_UNIX_FD
 #define DBUS_TYPE_UNIX_FD -1
 #endif
 
 #define HFP_EXT_PROFILE_PATH   "/bluetooth/profile/hfp_hf"
+
+static void parse_guint16(DBusMessageIter *iter, gpointer user_data)
+{
+	guint16 *value = user_data;
+
+	if (dbus_message_iter_get_arg_type(iter) !=  DBUS_TYPE_UINT16)
+		return;
+
+	dbus_message_iter_get_basic(iter, value);
+}
+
+static void parse_string(DBusMessageIter *iter, gpointer user_data)
+{
+	char **str = user_data;
+	int arg_type = dbus_message_iter_get_arg_type(iter);
+
+	if (arg_type != DBUS_TYPE_OBJECT_PATH && arg_type != DBUS_TYPE_STRING)
+		return;
+
+	dbus_message_iter_get_basic(iter, str);
+}
+
+static void parse_byte(DBusMessageIter *iter, gpointer user_data)
+{
+	guint8 *value = user_data;
+
+	if (dbus_message_iter_get_arg_type(iter) !=  DBUS_TYPE_BYTE)
+		return;
+
+	dbus_message_iter_get_basic(iter, value);
+}
+
+static void parse_byte_array(DBusMessageIter *iter, gpointer user_data)
+{
+	DBusMessageIter array;
+	GArray **garray = user_data;
+	guint8 *data = NULL;
+	int n = 0;
+
+	if (dbus_message_iter_get_arg_type(iter) !=  DBUS_TYPE_ARRAY)
+		return;
+
+	dbus_message_iter_recurse(iter, &array);
+	dbus_message_iter_get_fixed_array(&array, &data, &n);
+	if (n == 0)
+		return;
+
+	*garray = g_array_sized_new(TRUE, TRUE, sizeof(guint8), n);
+	*garray = g_array_append_vals(*garray, (gconstpointer) data, n);
+}
+
+static void parse_media_endpoints(DBusMessageIter *array, gpointer user_data)
+{
+	const char *path, *owner;
+	GSList **endpoints = user_data;
+	GArray *capabilities = NULL;
+	struct media_endpoint *endpoint;
+	guint8 codec;
+	DBusMessageIter dict, variant, entry;
+
+	if (dbus_message_iter_get_arg_type(array) != DBUS_TYPE_ARRAY)
+		return;
+
+	dbus_message_iter_recurse(array, &dict);
+
+	while (dbus_message_iter_get_arg_type(&dict) == DBUS_TYPE_DICT_ENTRY) {
+		path = NULL;
+		codec = 0x00;
+		capabilities = NULL;
+
+		dbus_message_iter_recurse(&dict, &entry);
+		if (dbus_message_iter_get_arg_type(&entry) != DBUS_TYPE_STRING)
+			return;
+
+		dbus_message_iter_get_basic(&entry, &owner);
+
+		dbus_message_iter_next(&entry);
+
+		if (dbus_message_iter_get_arg_type(&entry) != DBUS_TYPE_VARIANT)
+			return;
+
+		dbus_message_iter_recurse(&entry, &variant);
+
+		bluetooth_iter_parse_properties(&variant,
+				"Path", parse_string, &path,
+				"Codec", parse_byte, &codec,
+				"Capabilities", parse_byte_array, &capabilities,
+				NULL);
+
+		dbus_message_iter_next(&dict);
+
+		endpoint = media_endpoint_new(owner, path, codec, capabilities);
+		if (capabilities)
+			g_array_unref(capabilities);
+
+		*endpoints = g_slist_append(*endpoints, endpoint);
+
+		DBG("Media Endpoint %s %s codec:0x%02X Capabilities:%p",
+					owner, path, codec, capabilities);
+	}
+}
 
 static int hfp_probe(struct ofono_modem *modem)
 {
@@ -93,11 +195,48 @@ static struct ofono_modem_driver hfp_driver = {
 static DBusMessage *profile_new_connection(DBusConnection *conn,
 					DBusMessage *msg, void *user_data)
 {
+	DBusMessageIter entry;
+	const char *device;
+	GSList *endpoints = NULL;
+	guint16 version, features;
+	int fd;
+
 	DBG("Profile handler NewConnection");
 
-	return g_dbus_create_error(msg, BLUEZ_ERROR_INTERFACE
-					".NotImplemented",
-					"Implementation not provided");
+	if (dbus_message_iter_init(msg, &entry) == FALSE)
+		goto error;
+
+	if (dbus_message_iter_get_arg_type(&entry) != DBUS_TYPE_OBJECT_PATH)
+		goto error;
+
+	dbus_message_iter_get_basic(&entry, &device);
+	dbus_message_iter_next(&entry);
+	if (dbus_message_iter_get_arg_type(&entry) != DBUS_TYPE_UNIX_FD)
+		goto error;
+
+	dbus_message_iter_get_basic(&entry, &fd);
+	if (fd < 0)
+		goto error;
+
+	dbus_message_iter_next(&entry);
+
+	bluetooth_iter_parse_properties(&entry,
+			"Version", parse_guint16, &version,
+			"Features", parse_guint16, &features,
+			"MediaEndpoints", parse_media_endpoints, &endpoints,
+			NULL);
+
+	DBG("%s version: 0x%04x feature: 0x%04x", device, version, features);
+
+	if (endpoints == NULL) {
+		ofono_error("Media Endpoint missing");
+		goto error;
+	}
+	return NULL;
+
+error:
+	return g_dbus_create_error(msg, BLUEZ_ERROR_INTERFACE ".Rejected",
+					"Invalid arguments in method call");
 }
 
 static DBusMessage *profile_release(DBusConnection *conn,

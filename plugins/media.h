@@ -19,16 +19,11 @@
  *
  */
 
-#define	BLUEZ_SERVICE "org.bluez"
-#define BLUEZ_PROFILE_INTERFACE		BLUEZ_SERVICE ".Profile1"
-#define BLUEZ_ERROR_INTERFACE		BLUEZ_SERVICE ".Error"
+struct media_endpoint;
 
-#define HFP_HS_UUID	"0000111e-0000-1000-8000-00805f9b34fb"
+struct media_endpoint *media_endpoint_new(const char *owner,
+					const char *path,
+					guint8 codec,
+					GArray *capabilities);
 
-int bluetooth_register_profile(DBusConnection *conn, const char *uuid,
-					const char *name, const char *object);
-
-void bluetooth_unregister_profile(DBusConnection *conn, const char *object);
-
-void bluetooth_iter_parse_properties(DBusMessageIter *array,
-						const char *property, ...);
+void media_endpoint_free(gpointer data);
