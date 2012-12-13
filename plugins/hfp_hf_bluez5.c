@@ -25,6 +25,7 @@
 
 #include <errno.h>
 #include <stdlib.h>
+#include <stdio.h>
 #include <string.h>
 
 #include <glib.h>
@@ -59,6 +60,7 @@ struct hfp {
 	char *device_address;
 	char *device_path;
 	struct hfp_slc_info info;
+	guint8 current_codec;
 	DBusMessage *msg;
 	GIOChannel *slcio;
 	GSList *endpoints;
@@ -97,11 +99,58 @@ static void hfp_debug(const char *str, void *user_data)
 	ofono_info("%s%s", prefix, str);
 }
 
+static void bcs_notify(GAtResult *result, gpointer user_data)
+{
+	struct hfp *hfp = user_data;
+	struct hfp_slc_info *info = &hfp->info;
+	GAtResultIter iter;
+	GString *str;
+	int i, value;
+
+	g_at_result_iter_init(&iter, result);
+
+	if (!g_at_result_iter_next(&iter, "+BCS:"))
+		return;
+
+	if (!g_at_result_iter_next_number(&iter, &value))
+		return;
+
+	/* If some codec matches, we confirm it */
+	for (i = 0; i < info->codecs_len; i++) {
+		if (info->codecs[i] == value) {
+			char buf[32];
+
+			hfp->current_codec = value;
+			DBG("Negotiated HFP codec: %d", value);
+
+			snprintf(buf, sizeof(buf), "AT+BCS=%d", value);
+			g_at_chat_send(info->chat, buf, NULL, NULL,
+							NULL, NULL);
+			return;
+		}
+	}
+
+	/* If none matches, we send our supported codecs again */
+	str = g_string_new("AT+BAC=");
+
+	for (i = 0; i < info->codecs_len; i++) {
+		g_string_append_printf(str, "%d", info->codecs[i]);
+		if (i + 1 < info->codecs_len)
+			str = g_string_append(str, ",");
+	}
+
+	g_at_chat_send(info->chat, str->str, NULL, NULL, NULL, NULL);
+	g_string_free(str, TRUE);
+}
+
 static void slc_established(gpointer userdata)
 {
 	struct ofono_modem *modem = userdata;
 	struct hfp *hfp = ofono_modem_get_data(modem);
+	struct hfp_slc_info *info = &hfp->info;
 	DBusMessage *msg;
+
+	g_at_chat_register(info->chat, "+BCS:", bcs_notify, FALSE, hfp, NULL);
 
 	ofono_modem_set_powered(modem, TRUE);
 
@@ -433,6 +482,7 @@ static DBusMessage *profile_new_connection(DBusConnection *conn,
 	hfp->device_path = g_strdup(device);
 	hfp->endpoints = endpoints;
 	hfp->msg = dbus_message_ref(msg);
+	hfp->current_codec = HFP_CODEC_CVSD;
 
 	err = modem_register(hfp, "unknown", fd, version);
 	if (err < 0 && err != -EINPROGRESS) {
