@@ -24,15 +24,26 @@
 #endif
 
 #include <errno.h>
+#include <string.h>
+
 #include <glib.h>
 
 #include <gdbus.h>
+#include <gatchat.h>
+#include <gattty.h>
 
 #define OFONO_API_SUBJECT_TO_CHANGE
 #include <ofono/modem.h>
 #include <ofono/dbus.h>
 #include <ofono/plugin.h>
 #include <ofono/log.h>
+#include <ofono/devinfo.h>
+#include <ofono/netreg.h>
+#include <ofono/voicecall.h>
+#include <ofono/call-volume.h>
+#include <ofono/handsfree.h>
+
+#include <drivers/hfpmodem/slc.h>
 
 #include "bluez5.h"
 #include "media.h"
@@ -42,6 +53,62 @@
 #endif
 
 #define HFP_EXT_PROFILE_PATH   "/bluetooth/profile/hfp_hf"
+
+struct hfp {
+	char *device_address;
+	char *device_path;
+	struct hfp_slc_info info;
+	DBusMessage *msg;
+	GSList *endpoints;
+};
+
+static GHashTable *modem_hash = NULL;
+
+static void hfp_free(gpointer user_data)
+{
+	struct hfp *hfp = user_data;
+
+	if (hfp->msg)
+		dbus_message_unref(hfp->msg);
+
+	g_slist_free(hfp->endpoints);
+	g_free(hfp->device_address);
+	g_free(hfp->device_path);
+	g_free(hfp);
+}
+
+static void modem_data_free(gpointer user_data)
+{
+	struct ofono_modem *modem = user_data;
+	struct hfp *hfp = ofono_modem_get_data(modem);
+
+	hfp_free(hfp);
+}
+
+static int modem_register(struct hfp *hfp, const char *alias, int fd,
+							guint16 version)
+{
+	struct ofono_modem *modem;
+	int err = 0;
+	char *path;
+
+	path = g_strconcat("hfp", hfp->device_path, NULL);
+
+	modem = ofono_modem_create(path, "hfp");
+
+	g_free(path);
+
+	if (modem == NULL)
+		return -ENOMEM;
+
+	ofono_modem_set_data(modem, hfp);
+	ofono_modem_set_name(modem, alias);
+	ofono_modem_register(modem);
+
+	g_hash_table_insert(modem_hash, g_strdup(hfp->device_path), modem);
+
+	return err;
+}
 
 static void parse_guint16(DBusMessageIter *iter, gpointer user_data)
 {
@@ -161,6 +228,11 @@ static int hfp_enable(struct ofono_modem *modem)
 {
 	DBG("%p", modem);
 
+	if (ofono_modem_get_powered(modem))
+		return 0;
+
+	ofono_modem_set_powered(modem, TRUE);
+
 	return 0;
 }
 
@@ -168,12 +240,22 @@ static int hfp_disable(struct ofono_modem *modem)
 {
 	DBG("%p", modem);
 
+	ofono_modem_set_powered(modem, FALSE);
+
 	return 0;
 }
 
 static void hfp_pre_sim(struct ofono_modem *modem)
 {
+	struct hfp *hfp = ofono_modem_get_data(modem);
+
 	DBG("%p", modem);
+
+	ofono_devinfo_create(modem, 0, "hfpmodem", hfp->device_address);
+	ofono_voicecall_create(modem, 0, "hfpmodem", &hfp->info);
+	ofono_netreg_create(modem, 0, "hfpmodem", &hfp->info);
+	ofono_call_volume_create(modem, 0, "hfpmodem", &hfp->info);
+	ofono_handsfree_create(modem, 0, "hfpmodem", &hfp->info);
 }
 
 static void hfp_post_sim(struct ofono_modem *modem)
@@ -195,11 +277,12 @@ static struct ofono_modem_driver hfp_driver = {
 static DBusMessage *profile_new_connection(DBusConnection *conn,
 					DBusMessage *msg, void *user_data)
 {
+	struct hfp *hfp;
 	DBusMessageIter entry;
 	const char *device;
 	GSList *endpoints = NULL;
 	guint16 version, features;
-	int fd;
+	int fd, err;
 
 	DBG("Profile handler NewConnection");
 
@@ -232,6 +315,21 @@ static DBusMessage *profile_new_connection(DBusConnection *conn,
 		ofono_error("Media Endpoint missing");
 		goto error;
 	}
+
+	hfp = g_new0(struct hfp, 1);
+	hfp->device_address = g_strdup("unknown");
+	hfp->device_path = g_strdup(device);
+	hfp->endpoints = endpoints;
+	hfp->msg = dbus_message_ref(msg);
+
+	err = modem_register(hfp, "unknown", fd, version);
+	if (err < 0 && err != -EINPROGRESS) {
+		hfp_free(hfp);
+		return g_dbus_create_error(msg,
+				BLUEZ_ERROR_INTERFACE ".Rejected",
+				"%s", strerror(-err));
+	}
+
 	return NULL;
 
 error:
@@ -316,6 +414,9 @@ static int hfp_init(void)
 		return err;
 	}
 
+	modem_hash = g_hash_table_new_full(g_str_hash, g_str_equal, g_free,
+								modem_data_free);
+
 	return 0;
 }
 
@@ -327,6 +428,8 @@ static void hfp_exit(void)
 	g_dbus_unregister_interface(conn, HFP_EXT_PROFILE_PATH,
 						BLUEZ_PROFILE_INTERFACE);
 	ofono_modem_driver_unregister(&hfp_driver);
+
+	g_hash_table_destroy(modem_hash);
 }
 
 OFONO_PLUGIN_DEFINE(hfp_bluez5, "External Hands-Free Profile Plugin", VERSION,
