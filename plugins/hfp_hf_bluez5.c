@@ -24,6 +24,7 @@
 #endif
 
 #include <errno.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include <glib.h>
@@ -59,6 +60,7 @@ struct hfp {
 	char *device_path;
 	struct hfp_slc_info info;
 	DBusMessage *msg;
+	GIOChannel *slcio;
 	GSList *endpoints;
 };
 
@@ -70,6 +72,9 @@ static void hfp_free(gpointer user_data)
 
 	if (hfp->msg)
 		dbus_message_unref(hfp->msg);
+
+	if (hfp->slcio)
+		g_io_channel_unref(hfp->slcio);
 
 	g_slist_free(hfp->endpoints);
 	g_free(hfp->device_address);
@@ -85,12 +90,112 @@ static void modem_data_free(gpointer user_data)
 	hfp_free(hfp);
 }
 
+static void hfp_debug(const char *str, void *user_data)
+{
+	const char *prefix = user_data;
+
+	ofono_info("%s%s", prefix, str);
+}
+
+static void slc_established(gpointer userdata)
+{
+	struct ofono_modem *modem = userdata;
+	struct hfp *hfp = ofono_modem_get_data(modem);
+	DBusMessage *msg;
+
+	ofono_modem_set_powered(modem, TRUE);
+
+	msg = dbus_message_new_method_return(hfp->msg);
+	g_dbus_send_message(ofono_dbus_get_connection(), msg);
+	dbus_message_unref(hfp->msg);
+	hfp->msg = NULL;
+
+	ofono_info("Service level connection established");
+}
+
+static void slc_failed(gpointer userdata)
+{
+	struct ofono_modem *modem = userdata;
+	struct hfp *hfp = ofono_modem_get_data(modem);
+	DBusMessage *msg;
+
+	msg = g_dbus_create_error(hfp->msg, BLUEZ_ERROR_INTERFACE
+						".Failed",
+						"HFP Handshake failed");
+
+	g_dbus_send_message(ofono_dbus_get_connection(), msg);
+	dbus_message_unref(hfp->msg);
+	hfp->msg = NULL;
+
+	ofono_error("Service level connection failed");
+	ofono_modem_set_powered(modem, FALSE);
+
+	hfp_slc_info_free(&hfp->info);
+}
+
+static void hfp_disconnected_cb(gpointer user_data)
+{
+	struct ofono_modem *modem = user_data;
+	struct hfp *hfp = ofono_modem_get_data(modem);
+
+	DBG("HFP disconnected");
+
+	hfp_slc_info_free(&hfp->info);
+
+	ofono_modem_set_powered(modem, FALSE);
+	g_hash_table_remove(modem_hash, hfp->device_path);
+	ofono_modem_remove(modem);
+}
+
+static GIOChannel *service_level_connection(struct ofono_modem *modem, int fd, int *err)
+{
+	struct hfp *hfp = ofono_modem_get_data(modem);
+	GIOChannel *io;
+	GAtSyntax *syntax;
+	GAtChat *chat;
+
+	io = g_io_channel_unix_new(fd);
+	if (io == NULL) {
+		ofono_error("Service level connection failed: %s (%d)",
+			strerror(errno), errno);
+		*err = -EIO;
+		return NULL;
+	}
+
+	syntax = g_at_syntax_new_gsm_permissive();
+	chat = g_at_chat_new(io, syntax);
+	g_at_syntax_unref(syntax);
+	g_io_channel_set_close_on_unref(io, TRUE);
+
+	if (chat == NULL) {
+		*err = -ENOMEM;
+		goto fail;
+	}
+
+	g_at_chat_set_disconnect_function(chat, hfp_disconnected_cb, modem);
+
+	if (getenv("OFONO_AT_DEBUG"))
+		g_at_chat_set_debug(chat, hfp_debug, "");
+
+	hfp->info.chat = chat;
+	hfp_slc_establish(&hfp->info, slc_established, slc_failed, modem);
+
+	*err = -EINPROGRESS;
+
+	return io;
+
+fail:
+	g_io_channel_unref(io);
+	return NULL;
+}
+
 static int modem_register(struct hfp *hfp, const char *alias, int fd,
 							guint16 version)
 {
 	struct ofono_modem *modem;
-	int err = 0;
+	guint8 codecs[1];
 	char *path;
+	int err;
 
 	path = g_strconcat("hfp", hfp->device_path, NULL);
 
@@ -106,6 +211,13 @@ static int modem_register(struct hfp *hfp, const char *alias, int fd,
 	ofono_modem_register(modem);
 
 	g_hash_table_insert(modem_hash, g_strdup(hfp->device_path), modem);
+
+	memset(codecs, 0, sizeof(codecs));
+	codecs[0] = HFP_CODEC_CVSD;
+
+	hfp_slc_info_init(&hfp->info, version, codecs, 1);
+
+	hfp->slcio = service_level_connection(modem, fd, &err);
 
 	return err;
 }
