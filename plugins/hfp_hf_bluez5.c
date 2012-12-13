@@ -64,6 +64,7 @@ struct hfp {
 	DBusMessage *msg;
 	GIOChannel *slcio;
 	GSList *endpoints;
+	struct media_transport *transport;
 };
 
 static GHashTable *modem_hash = NULL;
@@ -143,12 +144,39 @@ static void bcs_notify(GAtResult *result, gpointer user_data)
 	g_string_free(str, TRUE);
 }
 
+static void transport_registered_cb(DBusPendingCall *call, gpointer user_data)
+{
+	DBusMessage *reply;
+	struct DBusError derr;
+	dbus_bool_t ret;
+
+	DBG("");
+
+	reply = dbus_pending_call_steal_reply(call);
+
+	dbus_error_init(&derr);
+
+	ret = dbus_set_error_from_message(&derr, reply);
+
+	dbus_message_unref(reply);
+
+	if (ret == FALSE)
+		return;
+
+	ofono_error("%s: %s", derr.name, derr.message);
+	dbus_error_free(&derr);
+
+	/* Disconnect SLC */
+}
+
 static void slc_established(gpointer userdata)
 {
 	struct ofono_modem *modem = userdata;
 	struct hfp *hfp = ofono_modem_get_data(modem);
 	struct hfp_slc_info *info = &hfp->info;
+	struct media_endpoint *endpoint;
 	DBusMessage *msg;
+	int fd;
 
 	g_at_chat_register(info->chat, "+BCS:", bcs_notify, FALSE, hfp, NULL);
 
@@ -160,6 +188,16 @@ static void slc_established(gpointer userdata)
 	hfp->msg = NULL;
 
 	ofono_info("Service level connection established");
+
+	endpoint = hfp->endpoints->data;
+	fd = g_io_channel_unix_get_fd(hfp->slcio);
+	hfp->transport = media_transport_new(fd, hfp->device_path, endpoint);
+	if (media_transport_register(hfp->transport, transport_registered_cb,
+								hfp) < 0) {
+		media_transport_free(hfp->transport);
+		hfp->transport = NULL;
+		return;
+	}
 }
 
 static void slc_failed(gpointer userdata)
@@ -180,6 +218,10 @@ static void slc_failed(gpointer userdata)
 	ofono_modem_set_powered(modem, FALSE);
 
 	hfp_slc_info_free(&hfp->info);
+
+	media_transport_unregister(hfp->transport);
+	media_transport_free(hfp->transport);
+	hfp->transport = NULL;
 }
 
 static void hfp_disconnected_cb(gpointer user_data)
