@@ -609,14 +609,44 @@ static DBusMessage *profile_release(DBusConnection *conn,
 						"Implementation not provided");
 }
 
+static void reply_pending(gpointer key, gpointer value, gpointer user_data)
+{
+	const char *owner, *sender = user_data;
+	struct ofono_modem *modem = value;
+	struct hfp *hfp = ofono_modem_get_data(modem);
+	DBusMessage *reply;
+
+	if (hfp->msg == NULL)
+		return;
+
+	owner = dbus_message_get_sender(hfp->msg);
+	if (g_str_equal(owner, sender) == FALSE)
+		return;
+
+	if (hfp->slcio) {
+		g_io_channel_unref(hfp->slcio);
+		hfp->slcio = NULL;
+	}
+
+	reply = g_dbus_create_error(hfp->msg,
+				BLUEZ_ERROR_INTERFACE ".Canceled",
+				"Operation canceled");
+	g_dbus_send_message(ofono_dbus_get_connection(), reply);
+
+	dbus_message_unref(hfp->msg);
+	hfp->msg = NULL;
+}
+
 static DBusMessage *profile_cancel(DBusConnection *conn,
 					DBusMessage *msg, void *user_data)
 {
+	char *sender = (char *) dbus_message_get_sender(msg);
+
 	DBG("Profile handler Cancel");
 
-	return g_dbus_create_error(msg, BLUEZ_ERROR_INTERFACE
-					".NotImplemented",
-					"Implementation not provided");
+	g_hash_table_foreach(modem_hash, reply_pending, sender);
+
+	return dbus_message_new_method_return(msg);
 }
 
 static DBusMessage *profile_disconnection(DBusConnection *conn,
