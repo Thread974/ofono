@@ -55,6 +55,8 @@ struct media_endpoint {
 struct media_transport {
 	char *path;
 	char *device_path;
+	guint watch;
+	GIOChannel *io;
 	enum transport_state state;
 	struct media_endpoint *endpoint;
 };
@@ -108,6 +110,13 @@ void media_transport_free(struct media_transport *transport)
 {
 	g_free(transport->device_path);
 	g_free(transport->path);
+
+	if (transport->watch)
+		g_source_remove(transport->watch);
+
+	if (transport->io)
+		g_io_channel_unref(transport->io);
+
 	g_free(transport);
 }
 
@@ -261,4 +270,33 @@ int media_transport_register(struct media_transport *transport,
 void media_transport_unregister(struct media_transport *transport)
 {
 	/* ClearConfiguration */
+}
+
+static gboolean channel_watch(GIOChannel *io, GIOCondition cond, gpointer user_data)
+{
+	struct media_transport *transport = user_data;
+
+	DBG("");
+
+	transport->state = STATE_IDLE;
+	transport->watch = 0;
+	g_io_channel_unref(transport->io);
+	transport->io = NULL;
+
+	return FALSE;
+}
+
+gboolean media_transport_set_channel(struct media_transport *transport,
+								GIOChannel *io)
+{
+	GIOCondition cond = G_IO_HUP | G_IO_ERR;
+
+	if (transport == NULL)
+		return FALSE;
+
+	transport->watch = g_io_add_watch(io, cond, channel_watch, transport);
+	transport->io = g_io_channel_ref(io);
+	g_io_channel_set_close_on_unref(transport->io, TRUE);
+
+	return TRUE;
 }

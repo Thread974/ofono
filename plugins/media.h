@@ -39,3 +39,6 @@ int media_transport_register(struct media_transport *transport,
 					gpointer user_data);
 
 void media_transport_unregister(struct media_transport *transport);
+
+gboolean media_transport_set_channel(struct media_transport *transport,
+							GIOChannel *io);
