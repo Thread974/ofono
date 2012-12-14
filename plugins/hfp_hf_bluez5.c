@@ -27,6 +27,11 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
+#include <unistd.h>
+#include <sys/socket.h>
+
+#include <bluetooth/bluetooth.h>
+#include <bluetooth/sco.h>
 
 #include <glib.h>
 
@@ -68,6 +73,8 @@ struct hfp {
 };
 
 static GHashTable *modem_hash = NULL;
+static GIOChannel *sco_io = NULL;
+static guint sco_watch = 0;
 
 static void hfp_free(gpointer user_data)
 {
@@ -584,6 +591,86 @@ static const GDBusMethodTable profile_methods[] = {
 	{ }
 };
 
+static gboolean sco_accept(GIOChannel *io, GIOCondition cond,
+							gpointer user_data)
+{
+	struct sockaddr_sco saddr;
+	socklen_t optlen;
+	GIOChannel *nio;
+	int sk, nsk;
+
+	DBG("");
+
+	if (cond & G_IO_NVAL)
+		return FALSE;
+
+	sk = g_io_channel_unix_get_fd(io);
+
+	memset(&saddr, 0, sizeof(saddr));
+	optlen = sizeof(saddr);
+
+	nsk = accept(sk, (struct sockaddr *) &saddr, &optlen);
+	if (nsk < 0)
+		return TRUE;
+
+	nio = g_io_channel_unix_new(nsk);
+
+	g_io_channel_set_close_on_unref(nio, TRUE);
+	g_io_channel_set_flags(nio, G_IO_FLAG_NONBLOCK, NULL);
+
+	return TRUE;
+}
+
+static GIOChannel *sco_listen(int *err)
+{
+	struct sockaddr_sco addr;
+	GIOChannel *io;
+	int sk;
+
+	sk = socket(PF_BLUETOOTH, SOCK_SEQPACKET, BTPROTO_SCO);
+	if (sk < 0) {
+		*err = -errno;
+		return NULL;
+	}
+
+	/* Bind to local address */
+	memset(&addr, 0, sizeof(addr));
+	addr.sco_family = AF_BLUETOOTH;
+	bacpy(&addr.sco_bdaddr, BDADDR_ANY);
+
+	if (bind(sk, (struct sockaddr *) &addr, sizeof(addr)) < 0) {
+		close(sk);
+		*err = -errno;
+		return NULL;
+	}
+
+	io = g_io_channel_unix_new(sk);
+	g_io_channel_set_close_on_unref(io, TRUE);
+	g_io_channel_set_flags(io, G_IO_FLAG_NONBLOCK, NULL);
+
+	if (listen(sk, 5) < 0) {
+		g_io_channel_unref(io);
+		*err = -errno;
+		return NULL;
+	}
+
+	return io;
+}
+
+static int sco_init(void)
+{
+	GIOCondition cond = G_IO_IN | G_IO_ERR | G_IO_HUP | G_IO_NVAL;
+	int err = 0;
+
+	sco_io = sco_listen(&err);
+	if (sco_io == NULL)
+		return err;
+
+	sco_watch = g_io_add_watch(sco_io, cond, sco_accept, NULL);
+
+	return err;
+}
+
 static int hfp_init(void)
 {
 	DBusConnection *conn = ofono_dbus_get_connection();
@@ -591,6 +678,12 @@ static int hfp_init(void)
 
 	if (DBUS_TYPE_UNIX_FD < 0)
 		return -EBADF;
+
+	err = sco_init();
+	if (err < 0) {
+		ofono_error("SCO: %s(%d)", strerror(-err), -err);
+		return err;
+	}
 
 	/* Registers External Profile handler */
 	if (!g_dbus_register_interface(conn, HFP_EXT_PROFILE_PATH,
@@ -634,6 +727,12 @@ static void hfp_exit(void)
 	ofono_modem_driver_unregister(&hfp_driver);
 
 	g_hash_table_destroy(modem_hash);
+
+	if (sco_watch)
+		g_source_remove(sco_watch);
+
+	if (sco_io)
+		g_io_channel_unref(sco_io);
 }
 
 OFONO_PLUGIN_DEFINE(hfp_bluez5, "External Hands-Free Profile Plugin", VERSION,
