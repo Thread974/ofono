@@ -31,6 +31,7 @@
 #include <sys/socket.h>
 
 #include <bluetooth/bluetooth.h>
+#include <bluetooth/rfcomm.h>
 #include <bluetooth/sco.h>
 
 #include <glib.h>
@@ -64,12 +65,18 @@
 struct hfp {
 	char *device_address;
 	char *device_path;
+	char *adapter_address;
 	struct hfp_slc_info info;
 	guint8 current_codec;
 	DBusMessage *msg;
 	GIOChannel *slcio;
 	GSList *endpoints;
 	struct media_transport *transport;
+};
+
+struct bt_peer {
+	char src[18];
+	char dst[18];
 };
 
 static GHashTable *modem_hash = NULL;
@@ -88,6 +95,7 @@ static void hfp_free(gpointer user_data)
 
 	g_slist_free(hfp->endpoints);
 	g_free(hfp->device_address);
+	g_free(hfp->adapter_address);
 	g_free(hfp->device_path);
 	g_free(hfp);
 }
@@ -105,6 +113,22 @@ static void hfp_debug(const char *str, void *user_data)
 	const char *prefix = user_data;
 
 	ofono_info("%s%s", prefix, str);
+}
+
+static int bt_ba2str(const bdaddr_t *ba, char *str)
+{
+	return sprintf(str, "%2.2X:%2.2X:%2.2X:%2.2X:%2.2X:%2.2X",
+		ba->b[5], ba->b[4], ba->b[3], ba->b[2], ba->b[1], ba->b[0]);
+}
+
+static gboolean modem_address_cmp(gpointer key, gpointer value, gpointer user_data)
+{
+	const struct bt_peer *peer = user_data;
+	struct ofono_modem *modem = value;
+	struct hfp *hfp = ofono_modem_get_data(modem);
+
+	return (g_str_equal(hfp->device_address, peer->dst) &&
+			g_str_equal(hfp->adapter_address, peer->src));
 }
 
 static void bcs_notify(GAtResult *result, gpointer user_data)
@@ -488,10 +512,13 @@ static DBusMessage *profile_new_connection(DBusConnection *conn,
 					DBusMessage *msg, void *user_data)
 {
 	struct hfp *hfp;
+	struct sockaddr_rc saddr;
+	socklen_t optlen;
 	DBusMessageIter entry;
 	const char *device;
 	GSList *endpoints = NULL;
 	guint16 version, features;
+	char device_address[18], adapter_address[18];
 	int fd, err;
 
 	DBG("Profile handler NewConnection");
@@ -526,8 +553,29 @@ static DBusMessage *profile_new_connection(DBusConnection *conn,
 		goto error;
 	}
 
+	memset(&saddr, 0, sizeof(saddr));
+	optlen = sizeof(saddr);
+	if (getsockname(fd, (struct sockaddr *) &saddr, &optlen) < 0) {
+		err = errno;
+		ofono_error("RFCOMM getsockname(): %s (%d)", strerror(err), err);
+		goto error;
+	}
+
+	bt_ba2str(&saddr.rc_bdaddr, adapter_address);
+
+	memset(&saddr, 0, sizeof(saddr));
+	optlen = sizeof(saddr);
+	if (getpeername(fd, (struct sockaddr *) &saddr, &optlen) < 0) {
+		err = errno;
+		ofono_error("RFCOMM getpeername(): %s (%d)", strerror(err), err);
+		goto error;
+	}
+
+	bt_ba2str(&saddr.rc_bdaddr, device_address);
+
 	hfp = g_new0(struct hfp, 1);
-	hfp->device_address = g_strdup("unknown");
+	hfp->device_address = g_strdup(device_address);
+	hfp->adapter_address = g_strdup(adapter_address);
 	hfp->device_path = g_strdup(device);
 	hfp->endpoints = endpoints;
 	hfp->msg = dbus_message_ref(msg);
@@ -595,9 +643,11 @@ static gboolean sco_accept(GIOChannel *io, GIOCondition cond,
 							gpointer user_data)
 {
 	struct sockaddr_sco saddr;
+	struct ofono_modem *modem;
 	socklen_t optlen;
 	GIOChannel *nio;
-	int sk, nsk;
+	struct bt_peer peer;
+	int sk, nsk, err;
 
 	DBG("");
 
@@ -612,6 +662,26 @@ static gboolean sco_accept(GIOChannel *io, GIOCondition cond,
 	nsk = accept(sk, (struct sockaddr *) &saddr, &optlen);
 	if (nsk < 0)
 		return TRUE;
+
+	bt_ba2str(&saddr.sco_bdaddr, peer.dst);
+
+	memset(&saddr, 0, sizeof(saddr));
+	optlen = sizeof(saddr);
+	if (getsockname(nsk, (struct sockaddr *) &saddr, &optlen) < 0) {
+		err = errno;
+		ofono_error("SCO getsockname(): %s (%d)", strerror(err), err);
+		return TRUE;
+	}
+
+	bt_ba2str(&saddr.sco_bdaddr, peer.src);
+	modem = g_hash_table_find(modem_hash, modem_address_cmp, &peer);
+	if (modem == NULL) {
+		ofono_error("Rejecting SCO: SLC connection missing!");
+		close(nsk);
+		return TRUE;
+	}
+
+	DBG("SCO: %s < %s (incoming)", peer.src, peer.dst);
 
 	nio = g_io_channel_unix_new(nsk);
 
