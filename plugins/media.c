@@ -61,6 +61,9 @@ struct media_transport {
 	GIOChannel *io;
 	enum transport_state state;
 	struct media_endpoint *endpoint;
+	media_hf_initiate_sco init_sco;
+	DBusMessage *pending;
+	gpointer user_data;
 };
 
 struct media_endpoint *media_endpoint_ref(struct media_endpoint *endpoint)
@@ -132,11 +135,16 @@ void media_transport_unref(struct media_transport *transport)
 	if (transport->io)
 		g_io_channel_unref(transport->io);
 
+	if (transport->pending)
+		dbus_message_unref(transport->pending);
+
 	g_free(transport);
 }
 
 struct media_transport *media_transport_new(const char *device,
-						struct media_endpoint *endpoint)
+						struct media_endpoint *endpoint,
+						media_hf_initiate_sco init_sco,
+						gpointer user_data)
 {
 	struct media_transport *transport;
 	static int id = 0;
@@ -146,6 +154,8 @@ struct media_transport *media_transport_new(const char *device,
 	transport->device_path = g_strdup(device);
 	transport->endpoint = media_endpoint_ref(endpoint);
 	transport->state = STATE_IDLE;
+	transport->init_sco = init_sco;
+	transport->user_data = user_data;
 
 	return media_transport_ref(transport);
 }
@@ -239,8 +249,20 @@ static DBusMessage *acquire(DBusConnection *conn, DBusMessage *msg,
 					".InProgress",
 					"Operation already in progress");
 
-	transport_set_state(transport, STATE_ACTIVE);
-	return acquire_message(msg, transport->io);
+	if (transport->state == STATE_PENDING) {
+		transport_set_state(transport, STATE_ACTIVE);
+		return acquire_message(msg, transport->io);
+	}
+
+	if (transport->init_sco == NULL)
+		return g_dbus_create_error(msg, ERROR_INTERFACE
+					".NotAvailable",
+					"Operation currently not available");
+
+	transport->pending = dbus_message_ref(msg);
+	transport->init_sco(transport, transport->user_data);
+
+	return NULL;
 }
 
 static DBusMessage *try_acquire(DBusConnection *conn, DBusMessage *msg,

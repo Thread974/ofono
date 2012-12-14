@@ -211,7 +211,8 @@ static void transport_register(gpointer data, gpointer user_data)
 	struct media_transport *transport;
 	struct hfp *hfp = user_data;
 
-	transport = media_transport_new(hfp->device_path, endpoint);
+	transport = media_transport_new(hfp->device_path, endpoint,
+								NULL, NULL);
 	if (media_transport_register(transport, transport_registered_cb,
 								hfp) < 0) {
 		media_transport_unref(transport);
