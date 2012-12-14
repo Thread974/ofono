@@ -164,6 +164,15 @@ static const char *state2str(enum transport_state state)
 	return "idle";
 }
 
+static void transport_set_state(struct media_transport *transport,
+						enum transport_state state)
+{
+	transport->state = state;
+	g_dbus_emit_property_changed(ofono_dbus_get_connection(),
+				transport->path, MEDIA_TRANSPORT_INTERFACE,
+				"State");
+}
+
 static void transport_append_properties(DBusMessageIter *iter,
 					struct media_transport *transport)
 {
@@ -230,7 +239,7 @@ static DBusMessage *acquire(DBusConnection *conn, DBusMessage *msg,
 					".InProgress",
 					"Operation already in progress");
 
-	transport->state = STATE_ACTIVE;
+	transport_set_state(transport, STATE_ACTIVE);
 	return acquire_message(msg, transport->io);
 }
 
@@ -257,7 +266,7 @@ static DBusMessage *try_acquire(DBusConnection *conn, DBusMessage *msg,
 					"Operation already in progress");
 
 	if (transport->state == STATE_PENDING) {
-		transport->state = STATE_ACTIVE;
+		transport_set_state(transport, STATE_ACTIVE);
 		return acquire_message(msg, transport->io);
 	}
 
@@ -273,7 +282,7 @@ static DBusMessage *release(DBusConnection *conn, DBusMessage *msg,
 
 	DBG("");
 
-	transport->state = STATE_IDLE;
+	transport_set_state(transport, STATE_IDLE);
 
 	return g_dbus_create_error(msg, ERROR_INTERFACE
 					".NotImplemented",
@@ -429,7 +438,8 @@ static gboolean channel_watch(GIOChannel *io, GIOCondition cond, gpointer user_d
 
 	DBG("");
 
-	transport->state = STATE_IDLE;
+	transport_set_state(transport, STATE_IDLE);
+
 	transport->watch = 0;
 	g_io_channel_unref(transport->io);
 	transport->io = NULL;
