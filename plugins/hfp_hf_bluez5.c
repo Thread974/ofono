@@ -178,6 +178,7 @@ static void bcs_notify(GAtResult *result, gpointer user_data)
 
 static void transport_registered_cb(DBusPendingCall *call, gpointer user_data)
 {
+	struct hfp *hfp = user_data;
 	DBusMessage *reply;
 	struct DBusError derr;
 	dbus_bool_t ret;
@@ -198,7 +199,10 @@ static void transport_registered_cb(DBusPendingCall *call, gpointer user_data)
 	ofono_error("%s: %s", derr.name, derr.message);
 	dbus_error_free(&derr);
 
-	/* Disconnect SLC */
+	if (hfp->slcio) {
+		g_io_channel_unref(hfp->slcio);
+		hfp->slcio = NULL;
+	}
 }
 
 static void transport_register(gpointer data, gpointer user_data)
