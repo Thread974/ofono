@@ -71,7 +71,7 @@ struct hfp {
 	DBusMessage *msg;
 	GIOChannel *slcio;
 	GSList *endpoints;
-	struct media_transport *transport;
+	GSList *transports;
 };
 
 struct bt_peer {
@@ -93,7 +93,8 @@ static void hfp_free(gpointer user_data)
 	if (hfp->slcio)
 		g_io_channel_unref(hfp->slcio);
 
-	g_slist_free(hfp->endpoints);
+	g_slist_free_full(hfp->endpoints, (GDestroyNotify) media_endpoint_unref);
+	g_slist_free_full(hfp->transports, (GDestroyNotify) media_transport_unref);
 	g_free(hfp->device_address);
 	g_free(hfp->adapter_address);
 	g_free(hfp->device_path);
@@ -200,14 +201,28 @@ static void transport_registered_cb(DBusPendingCall *call, gpointer user_data)
 	/* Disconnect SLC */
 }
 
+static void transport_register(gpointer data, gpointer user_data)
+{
+	struct media_endpoint *endpoint = data;
+	struct media_transport *transport;
+	struct hfp *hfp = user_data;
+
+	transport = media_transport_new(hfp->device_path, endpoint);
+	if (media_transport_register(transport, transport_registered_cb,
+								hfp) < 0) {
+		media_transport_unref(transport);
+		return;
+	}
+
+	hfp->transports = g_slist_append(hfp->transports, transport);
+}
+
 static void slc_established(gpointer userdata)
 {
 	struct ofono_modem *modem = userdata;
 	struct hfp *hfp = ofono_modem_get_data(modem);
 	struct hfp_slc_info *info = &hfp->info;
-	struct media_endpoint *endpoint;
 	DBusMessage *msg;
-	int fd;
 
 	g_at_chat_register(info->chat, "+BCS:", bcs_notify, FALSE, hfp, NULL);
 
@@ -220,15 +235,7 @@ static void slc_established(gpointer userdata)
 
 	ofono_info("Service level connection established");
 
-	endpoint = hfp->endpoints->data;
-	fd = g_io_channel_unix_get_fd(hfp->slcio);
-	hfp->transport = media_transport_new(fd, hfp->device_path, endpoint);
-	if (media_transport_register(hfp->transport, transport_registered_cb,
-								hfp) < 0) {
-		media_transport_unref(hfp->transport);
-		hfp->transport = NULL;
-		return;
-	}
+	g_slist_foreach(hfp->endpoints, transport_register, hfp);
 }
 
 static void slc_failed(gpointer userdata)
@@ -249,10 +256,6 @@ static void slc_failed(gpointer userdata)
 	ofono_modem_set_powered(modem, FALSE);
 
 	hfp_slc_info_free(&hfp->info);
-
-	media_transport_unregister(hfp->transport);
-	media_transport_unref(hfp->transport);
-	hfp->transport = NULL;
 }
 
 static void hfp_disconnected_cb(gpointer user_data)

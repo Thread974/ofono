@@ -31,7 +31,7 @@ struct media_endpoint *media_endpoint_new(const char *owner,
 struct media_endpoint *media_endpoint_ref(struct media_endpoint *endpoint);
 void media_endpoint_unref(struct media_endpoint *endpoint);
 
-struct media_transport *media_transport_new(int id, const char *device,
+struct media_transport *media_transport_new(const char *device,
 					struct media_endpoint *endpoint);
 
 struct media_transport *media_transport_ref(struct media_transport *transport);

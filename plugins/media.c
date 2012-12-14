@@ -135,14 +135,14 @@ void media_transport_unref(struct media_transport *transport)
 	g_free(transport);
 }
 
-struct media_transport *media_transport_new(int id, const char *device,
+struct media_transport *media_transport_new(const char *device,
 						struct media_endpoint *endpoint)
-
 {
 	struct media_transport *transport;
+	static int id = 0;
 
 	transport = g_new0(struct media_transport, 1);
-	transport->path = g_strdup_printf("%s/%d", device, id);
+	transport->path = g_strdup_printf("/transport%d%s/fd", id++, device);
 	transport->device_path = g_strdup(device);
 	transport->endpoint = media_endpoint_ref(endpoint);
 	transport->state = STATE_IDLE;
