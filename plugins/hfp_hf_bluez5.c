@@ -365,6 +365,13 @@ static void transport_register(gpointer data, gpointer user_data)
 	hfp->transports = g_slist_append(hfp->transports, transport);
 }
 
+static void transport_unregister(gpointer data, gpointer user_data)
+{
+	struct media_transport *transport = data;
+
+	media_transport_unregister(transport);
+}
+
 static void slc_established(gpointer userdata)
 {
 	struct ofono_modem *modem = userdata;
@@ -414,6 +421,10 @@ static void hfp_disconnected_cb(gpointer user_data)
 	DBG("HFP disconnected");
 
 	hfp_slc_info_free(&hfp->info);
+
+	g_slist_foreach(hfp->transports, transport_unregister, hfp);
+	g_slist_free_full(hfp->transports, (GDestroyNotify) media_transport_unref);
+	hfp->transports = NULL;
 
 	ofono_modem_set_powered(modem, FALSE);
 	g_hash_table_remove(modem_hash, hfp->device_path);
