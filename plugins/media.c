@@ -493,14 +493,39 @@ static gboolean channel_watch(GIOChannel *io, GIOCondition cond, gpointer user_d
 gboolean media_transport_set_channel(struct media_transport *transport,
 								GIOChannel *io)
 {
-	GIOCondition cond = G_IO_HUP | G_IO_ERR;
+	DBusMessage *reply;
 
 	if (transport == NULL)
 		return FALSE;
 
-	transport->watch = g_io_add_watch(io, cond, channel_watch, transport);
-	transport->io = g_io_channel_ref(io);
-	g_io_channel_set_close_on_unref(transport->io, TRUE);
+	if (io) {
+		GIOCondition cond = G_IO_HUP | G_IO_ERR;
+
+		transport->watch = g_io_add_watch(io, cond, channel_watch,
+								transport);
+		transport->io = g_io_channel_ref(io);
+		g_io_channel_set_close_on_unref(transport->io, TRUE);
+	}
+
+	/* Acquire NOT pending */
+	if (transport->pending == NULL) {
+		transport_set_state(transport, STATE_PENDING);
+		return TRUE;
+	}
+
+	if (io) {
+		transport_set_state(transport, STATE_ACTIVE);
+		reply = acquire_message(transport->pending, transport->io);
+	} else
+		reply = g_dbus_create_error(transport->pending,
+						BLUEZ_ERROR_INTERFACE
+						".Failed",
+						"Connection failed");
+
+	dbus_message_unref(transport->pending);
+	transport->pending = NULL;
+
+	g_dbus_send_message(ofono_dbus_get_connection(), reply);
 
 	return TRUE;
 }

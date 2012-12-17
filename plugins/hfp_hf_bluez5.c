@@ -176,6 +176,31 @@ static void bcs_notify(GAtResult *result, gpointer user_data)
 	g_string_free(str, TRUE);
 }
 
+static void bcc_cb(gboolean ok, GAtResult *result, gpointer user_data)
+{
+	struct media_transport *transport = user_data;
+
+	if (ok)
+		return;
+
+	media_transport_set_channel(transport, NULL);
+}
+
+static void hfp16_initiate_sco(struct media_transport *transport,
+							gpointer user_data)
+{
+	struct hfp *hfp = user_data;
+	struct hfp_slc_info *info = &hfp->info;
+
+	g_at_chat_send(info->chat, "AT+BCC", NULL, bcc_cb, transport, NULL);
+}
+
+static void hfp15_initiate_sco(struct media_transport *transport,
+							gpointer user_data)
+{
+	DBG("Function not implemented yet");
+}
+
 static void transport_registered_cb(DBusPendingCall *call, gpointer user_data)
 {
 	struct hfp *hfp = user_data;
@@ -210,9 +235,16 @@ static void transport_register(gpointer data, gpointer user_data)
 	struct media_endpoint *endpoint = data;
 	struct media_transport *transport;
 	struct hfp *hfp = user_data;
+	struct hfp_slc_info *info = &hfp->info;
+	media_hf_initiate_sco cb;
 
-	transport = media_transport_new(hfp->device_path, endpoint,
-								NULL, NULL);
+	if (info->ag_features & HFP_AG_FEATURE_CODEC_NEGOTIATION &&
+                       info->hf_features & HFP_HF_FEATURE_CODEC_NEGOTIATION)
+		cb = hfp16_initiate_sco;
+	else
+		cb = hfp15_initiate_sco;
+
+	transport = media_transport_new(hfp->device_path, endpoint, cb, hfp);
 	if (media_transport_register(transport, transport_registered_cb,
 								hfp) < 0) {
 		media_transport_unref(transport);
