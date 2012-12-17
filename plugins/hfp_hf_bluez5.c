@@ -70,6 +70,8 @@ struct hfp {
 	guint8 current_codec;
 	DBusMessage *msg;
 	GIOChannel *slcio;
+	GIOChannel *scoio;
+	guint sco_watch;
 	GSList *endpoints;
 	GSList *transports;
 };
@@ -92,6 +94,12 @@ static void hfp_free(gpointer user_data)
 
 	if (hfp->slcio)
 		g_io_channel_unref(hfp->slcio);
+
+	if (hfp->sco_watch)
+		g_source_remove(hfp->sco_watch);
+
+	if (hfp->scoio)
+		g_io_channel_unref(hfp->scoio);
 
 	g_slist_free_full(hfp->endpoints, (GDestroyNotify) media_endpoint_unref);
 	g_slist_free_full(hfp->transports, (GDestroyNotify) media_transport_unref);
@@ -122,6 +130,16 @@ static int bt_ba2str(const bdaddr_t *ba, char *str)
 		ba->b[5], ba->b[4], ba->b[3], ba->b[2], ba->b[1], ba->b[0]);
 }
 
+static int bt_str2ba(const char *str, bdaddr_t *ba)
+{
+	int i;
+
+	for (i = 5; i >= 0; i--, str += 3)
+		ba->b[i] = strtol(str, NULL, 16);
+
+	return 0;
+}
+
 static gboolean modem_address_cmp(gpointer key, gpointer value, gpointer user_data)
 {
 	const struct bt_peer *peer = user_data;
@@ -130,6 +148,78 @@ static gboolean modem_address_cmp(gpointer key, gpointer value, gpointer user_da
 
 	return (g_str_equal(hfp->device_address, peer->dst) &&
 			g_str_equal(hfp->adapter_address, peer->src));
+}
+
+static void sco_watch_destroy(gpointer user_data)
+{
+	struct hfp *hfp = user_data;
+
+	hfp->sco_watch = 0;
+	if (hfp->scoio) {
+		g_io_channel_unref(hfp->scoio);
+		hfp->scoio = NULL;
+	}
+}
+
+static gboolean sco_connect_cb(GIOChannel *io, GIOCondition cond,
+							gpointer user_data)
+
+{
+	struct hfp *hfp = user_data;
+	struct media_transport *transport;
+
+	if (cond & (G_IO_ERR | G_IO_HUP | G_IO_NVAL))
+		return FALSE;
+
+	DBG("%s connected to %s", hfp->adapter_address, hfp->device_address);
+
+	/* FIXME: For now, get the first element */
+	transport = hfp->transports->data;
+	media_transport_set_channel(transport, io);
+
+	return FALSE;
+}
+
+static GIOChannel *sco_connect(bdaddr_t *src, bdaddr_t *dst, int *err)
+{
+	struct sockaddr_sco addr;
+	GIOChannel *io;
+	int sk, ret;
+
+	sk = socket(PF_BLUETOOTH, SOCK_SEQPACKET, BTPROTO_SCO);
+	if (sk < 0) {
+		*err = errno;
+		return NULL;
+	}
+
+	/* Bind to local address */
+	memset(&addr, 0, sizeof(addr));
+	addr.sco_family = AF_BLUETOOTH;
+	bacpy(&addr.sco_bdaddr, src);
+
+	if (bind(sk, (struct sockaddr *) &addr, sizeof(addr)) < 0) {
+		close(sk);
+		*err = errno;
+		return NULL;
+	}
+
+	/* Connect to remote device */
+	memset(&addr, 0, sizeof(addr));
+	addr.sco_family = AF_BLUETOOTH;
+	bacpy(&addr.sco_bdaddr, dst);
+
+	io = g_io_channel_unix_new(sk);
+	g_io_channel_set_close_on_unref(io, TRUE);
+	g_io_channel_set_flags(io, G_IO_FLAG_NONBLOCK, NULL);
+
+	ret = connect(sk, (struct sockaddr *) &addr, sizeof(addr));
+	if (ret < 0 && !(errno == EAGAIN || errno == EINPROGRESS)) {
+		g_io_channel_unref(io);
+		*err = errno;
+		return NULL;
+	}
+
+	return io;
 }
 
 static void bcs_notify(GAtResult *result, gpointer user_data)
@@ -192,13 +282,34 @@ static void hfp16_initiate_sco(struct media_transport *transport,
 	struct hfp *hfp = user_data;
 	struct hfp_slc_info *info = &hfp->info;
 
+	DBG("HFP16 connecting SCO ...");
 	g_at_chat_send(info->chat, "AT+BCC", NULL, bcc_cb, transport, NULL);
 }
 
 static void hfp15_initiate_sco(struct media_transport *transport,
 							gpointer user_data)
 {
-	DBG("Function not implemented yet");
+	struct hfp *hfp = user_data;
+	GIOCondition cond;
+	bdaddr_t src, dst;
+	int err = 0;
+
+	DBG("HFP15 connecting SCO: %s > %s", hfp->adapter_address,
+						hfp->device_address);
+
+	bt_str2ba(hfp->adapter_address, &src);
+	bt_str2ba(hfp->device_address, &dst);
+
+	hfp->scoio = sco_connect(&src, &dst, &err);
+	if (hfp->scoio == NULL) {
+		ofono_error("SCO connect: %s(%d)", strerror(err), err);
+		return;
+	}
+
+	cond = G_IO_OUT | G_IO_ERR | G_IO_HUP | G_IO_NVAL;
+	hfp->sco_watch = g_io_add_watch_full(hfp->scoio, G_PRIORITY_DEFAULT,
+						cond, sco_connect_cb, hfp,
+						sco_watch_destroy);
 }
 
 static void transport_registered_cb(DBusPendingCall *call, gpointer user_data)
