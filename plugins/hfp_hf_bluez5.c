@@ -811,11 +811,38 @@ static DBusMessage *profile_cancel(DBusConnection *conn,
 static DBusMessage *profile_disconnection(DBusConnection *conn,
 					DBusMessage *msg, void *user_data)
 {
+	struct ofono_modem *modem;
+	struct hfp *hfp;
+	const char *device = NULL;
+	DBusMessageIter entry;
+
 	DBG("Profile handler RequestDisconnection");
 
-	return g_dbus_create_error(msg, BLUEZ_ERROR_INTERFACE
-					".NotImplemented",
-					"Implementation not provided");
+	if (dbus_message_iter_init(msg, &entry) == FALSE)
+		goto error;
+
+	if (dbus_message_iter_get_arg_type(&entry) != DBUS_TYPE_OBJECT_PATH)
+		goto error;
+
+	dbus_message_iter_get_basic(&entry, &device);
+
+	modem = g_hash_table_lookup(modem_hash, device);
+	if (modem == NULL)
+		goto error;
+
+	hfp = ofono_modem_get_data(modem);
+	if (hfp->slcio) {
+		g_io_channel_shutdown(hfp->slcio, FALSE, NULL);
+		g_io_channel_unref(hfp->slcio);
+		hfp->slcio = NULL;
+	}
+
+	return dbus_message_new_method_return(msg);
+
+error:
+	return g_dbus_create_error(msg,
+			BLUEZ_ERROR_INTERFACE ".Rejected",
+			"Invalid arguments in method call");
 }
 
 static const GDBusMethodTable profile_methods[] = {
