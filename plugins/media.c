@@ -285,11 +285,13 @@ static DBusMessage *acquire(DBusConnection *conn, DBusMessage *msg,
 
 	DBG("sender %s owner %s", sender, endpoint->owner);
 
+#if 0
 	if (!g_str_equal(sender, endpoint->owner) ||
 			transport->state == STATE_ACTIVE || transport->pending)
 		return g_dbus_create_error(msg, ERROR_INTERFACE
 						".NotAuthorized",
 						"Operation not authorized");
+#endif
 
 	if (transport->state == STATE_PENDING) {
 		transport_set_state(transport, STATE_ACTIVE);
@@ -319,11 +321,13 @@ static DBusMessage *try_acquire(DBusConnection *conn, DBusMessage *msg,
 
 	DBG("sender %s owner %s", sender, endpoint->owner);
 
+#if 0
 	if (!g_str_equal(sender, endpoint->owner) ||
 					transport->state == STATE_ACTIVE)
 		return g_dbus_create_error(msg, ERROR_INTERFACE
 						".NotAuthorized",
 						"Operation not authorized");
+#endif
 
 	if (transport->state == STATE_PENDING) {
 		transport_set_state(transport, STATE_ACTIVE);
