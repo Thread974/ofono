@@ -30,10 +30,6 @@
 #include <unistd.h>
 #include <sys/socket.h>
 
-#include <bluetooth/bluetooth.h>
-#include <bluetooth/rfcomm.h>
-#include <bluetooth/sco.h>
-
 #include <glib.h>
 
 #include <gdbus.h>
@@ -124,6 +120,11 @@ static void hfp_debug(const char *str, void *user_data)
 	ofono_info("%s%s", prefix, str);
 }
 
+static void bt_bacpy(bdaddr_t *dst, const bdaddr_t *src)
+{
+	memcpy(dst, src, sizeof(bdaddr_t));
+}
+
 static int bt_ba2str(const bdaddr_t *ba, char *str)
 {
 	return sprintf(str, "%2.2X:%2.2X:%2.2X:%2.2X:%2.2X:%2.2X",
@@ -200,7 +201,7 @@ static GIOChannel *sco_connect(bdaddr_t *src, bdaddr_t *dst, int *err)
 	/* Bind to local address */
 	memset(&addr, 0, sizeof(addr));
 	addr.sco_family = AF_BLUETOOTH;
-	bacpy(&addr.sco_bdaddr, src);
+	bt_bacpy(&addr.sco_bdaddr, src);
 
 	if (bind(sk, (struct sockaddr *) &addr, sizeof(addr)) < 0) {
 		close(sk);
@@ -211,7 +212,7 @@ static GIOChannel *sco_connect(bdaddr_t *src, bdaddr_t *dst, int *err)
 	/* Connect to remote device */
 	memset(&addr, 0, sizeof(addr));
 	addr.sco_family = AF_BLUETOOTH;
-	bacpy(&addr.sco_bdaddr, dst);
+	bt_bacpy(&addr.sco_bdaddr, dst);
 
 	io = g_io_channel_unix_new(sk);
 	g_io_channel_set_close_on_unref(io, TRUE);
@@ -945,7 +946,7 @@ static GIOChannel *sco_listen(int *err)
 	/* Bind to local address */
 	memset(&addr, 0, sizeof(addr));
 	addr.sco_family = AF_BLUETOOTH;
-	bacpy(&addr.sco_bdaddr, BDADDR_ANY);
+	bt_bacpy(&addr.sco_bdaddr, BDADDR_ANY);
 
 	if (bind(sk, (struct sockaddr *) &addr, sizeof(addr)) < 0) {
 		close(sk);
