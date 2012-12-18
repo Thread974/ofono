@@ -34,6 +34,8 @@ struct media_endpoint *media_endpoint_new(const char *owner,
 struct media_endpoint *media_endpoint_ref(struct media_endpoint *endpoint);
 void media_endpoint_unref(struct media_endpoint *endpoint);
 
+guint8 *media_endpoints_to_codecs(GSList *endpoints, int *len);
+
 struct media_transport *media_transport_new(const char *device,
 					struct media_endpoint *endpoint,
 					media_hf_initiate_sco init_sco,

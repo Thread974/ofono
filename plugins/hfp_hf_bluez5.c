@@ -477,9 +477,9 @@ static int modem_register(struct hfp *hfp, const char *alias, int fd,
 							guint16 version)
 {
 	struct ofono_modem *modem;
-	guint8 codecs[1];
+	guint8 *codecs;
 	char *path;
-	int err;
+	int err, len;
 
 	path = g_strconcat("hfp", hfp->device_path, NULL);
 
@@ -496,10 +496,10 @@ static int modem_register(struct hfp *hfp, const char *alias, int fd,
 
 	g_hash_table_insert(modem_hash, g_strdup(hfp->device_path), modem);
 
-	memset(codecs, 0, sizeof(codecs));
-	codecs[0] = HFP_CODEC_CVSD;
+	codecs = media_endpoints_to_codecs(hfp->endpoints, &len);
+	hfp_slc_info_init(&hfp->info, version, codecs, len);
 
-	hfp_slc_info_init(&hfp->info, version, codecs, 1);
+	g_free(codecs);
 
 	hfp->slcio = service_level_connection(modem, fd, &err);
 

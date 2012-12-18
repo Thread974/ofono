@@ -118,6 +118,28 @@ struct media_transport *media_transport_ref(struct media_transport *transport)
 	return transport;
 }
 
+guint8 *media_endpoints_to_codecs(GSList *endpoints, int *len)
+{
+	GSList *l;
+	guint8 *codecs;
+	int i;
+
+	if (endpoints == NULL || len == NULL)
+		return NULL;
+
+	*len = g_slist_length(endpoints);
+
+	codecs = g_malloc0(*len * sizeof(guint8));
+
+	for (i = 0, l = endpoints; l; l = l->next, i++) {
+		struct media_endpoint *endpoint = l->data;
+
+		codecs[i] = endpoint->codec;
+	}
+
+	return codecs;
+}
+
 void media_transport_unref(struct media_transport *transport)
 {
 	if (g_atomic_int_dec_and_test(&transport->ref) == FALSE)
