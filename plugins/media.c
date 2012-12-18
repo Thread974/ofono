@@ -182,6 +182,21 @@ struct media_transport *media_transport_new(const char *device,
 	return media_transport_ref(transport);
 }
 
+struct media_transport *media_transport_by_codec(GSList *transports,
+							guint8 codec)
+{
+	GSList *l;
+
+	for (l = transports; l; l = l->next) {
+		struct media_transport *transport = l->data;
+
+		if (transport->endpoint->codec == codec)
+			return transport;
+	}
+
+	return NULL;
+}
+
 static const char *state2str(enum transport_state state)
 {
 	switch(state) {

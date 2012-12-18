@@ -173,8 +173,13 @@ static gboolean sco_connect_cb(GIOChannel *io, GIOCondition cond,
 
 	DBG("%s connected to %s", hfp->adapter_address, hfp->device_address);
 
-	/* FIXME: For now, get the first element */
-	transport = hfp->transports->data;
+	transport = media_transport_by_codec(hfp->transports,
+						hfp->current_codec);
+	if (transport == NULL) {
+		ofono_error("No transport for codec %d", hfp->current_codec);
+		return FALSE;
+	}
+
 	media_transport_set_channel(transport, io);
 
 	return FALSE;
@@ -863,6 +868,8 @@ static gboolean sco_accept(GIOChannel *io, GIOCondition cond,
 {
 	struct sockaddr_sco saddr;
 	struct ofono_modem *modem;
+	struct media_transport *transport;
+	struct hfp *hfp;
 	socklen_t optlen;
 	GIOChannel *nio;
 	struct bt_peer peer;
@@ -906,6 +913,19 @@ static gboolean sco_accept(GIOChannel *io, GIOCondition cond,
 
 	g_io_channel_set_close_on_unref(nio, TRUE);
 	g_io_channel_set_flags(nio, G_IO_FLAG_NONBLOCK, NULL);
+
+	hfp = ofono_modem_get_data(modem);
+
+	transport = media_transport_by_codec(hfp->transports,
+						hfp->current_codec);
+	if (transport == NULL) {
+		ofono_error("No transport for codec %d", hfp->current_codec);
+		return TRUE;
+	}
+
+	media_transport_set_channel(transport, nio);
+
+	g_io_channel_unref(nio);
 
 	return TRUE;
 }

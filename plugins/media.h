@@ -41,6 +41,9 @@ struct media_transport *media_transport_new(const char *device,
 					media_hf_initiate_sco init_sco,
 					gpointer user_data);
 
+struct media_transport *media_transport_by_codec(GSList *transports,
+							guint8 codec);
+
 struct media_transport *media_transport_ref(struct media_transport *transport);
 void media_transport_unref(struct media_transport *transport);
 
