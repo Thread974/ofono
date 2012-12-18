@@ -301,14 +301,30 @@ static DBusMessage *release(DBusConnection *conn, DBusMessage *msg,
 							void *user_data)
 {
 	struct media_transport *transport = user_data;
+	struct media_endpoint *endpoint = transport->endpoint;
+	const char *sender;
 
-	DBG("");
+	sender = dbus_message_get_sender(msg);
+
+	DBG("sender %s owner %s", sender, endpoint->owner);
+
+	if (!g_str_equal(sender, endpoint->owner))
+		return g_dbus_create_error(msg, ERROR_INTERFACE
+						".NotAuthorized",
+						"Operation not authorized");
+
+	if (transport->state != STATE_ACTIVE)
+		goto done;
 
 	transport_set_state(transport, STATE_IDLE);
+	if (transport->io) {
+		g_io_channel_unref(transport->io);
+		g_io_channel_shutdown(transport->io, FALSE, NULL);
+		transport->io = NULL;
+	}
 
-	return g_dbus_create_error(msg, ERROR_INTERFACE
-					".NotImplemented",
-					"Implementation not provided");
+done:
+	return dbus_message_new_method_return(msg);
 }
 
 static gboolean transport_property_get_device(const GDBusPropertyTable *prop,
