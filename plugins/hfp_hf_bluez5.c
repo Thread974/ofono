@@ -934,7 +934,7 @@ static GIOChannel *sco_listen(int *err)
 {
 	struct sockaddr_sco addr;
 	GIOChannel *io;
-	int sk;
+	int sk, defer_setup = 1;
 
 	sk = socket(PF_BLUETOOTH, SOCK_SEQPACKET, BTPROTO_SCO);
 	if (sk < 0) {
@@ -951,6 +951,13 @@ static GIOChannel *sco_listen(int *err)
 		close(sk);
 		*err = -errno;
 		return NULL;
+	}
+
+	if (setsockopt(sk, SOL_BLUETOOTH, BT_DEFER_SETUP,
+				&defer_setup, sizeof(defer_setup)) < 0) {
+		ofono_warn("Can't enable deferred setup: %s (%d)",
+						strerror(errno), errno);
+		*err = -errno;
 	}
 
 	io = g_io_channel_unix_new(sk);
