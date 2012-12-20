@@ -864,6 +864,35 @@ static const GDBusMethodTable profile_methods[] = {
 	{ }
 };
 
+static uint8_t codec2mode(uint8_t codec)
+{
+	switch (codec) {
+	case HFP_CODEC_CVSD:
+		return SCO_MODE_CVSD;
+	default:
+		return SCO_MODE_TRANSPARENT;
+	}
+}
+
+static gboolean sco_set_codec(int sk, uint8_t codec)
+{
+	struct sco_options options;
+	int err;
+
+	memset(&options, 0, sizeof(options));
+
+	options.mode = codec2mode(codec);
+
+	if (setsockopt(sk, SOL_SCO, SCO_OPTIONS, &options, sizeof(options)) < 0) {
+		err = errno;
+		ofono_error("Can't set SCO options: %s (%d)",
+							strerror(err), err);
+		return FALSE;
+	}
+
+	return TRUE;
+}
+
 static gboolean sco_accept(GIOChannel *io, GIOCondition cond,
 							gpointer user_data)
 {
@@ -908,14 +937,21 @@ static gboolean sco_accept(GIOChannel *io, GIOCondition cond,
 		return TRUE;
 	}
 
+	hfp = ofono_modem_get_data(modem);
+
+	if (sco_set_codec(nsk, hfp->current_codec) == FALSE) {
+		ofono_error("Can't set codec SCO option");
+
+		/* Fallback to the default codec */
+		hfp->current_codec = HFP_CODEC_CVSD;
+	}
+
 	DBG("SCO: %s < %s (incoming)", peer.src, peer.dst);
 
 	nio = g_io_channel_unix_new(nsk);
 
 	g_io_channel_set_close_on_unref(nio, TRUE);
 	g_io_channel_set_flags(nio, G_IO_FLAG_NONBLOCK, NULL);
-
-	hfp = ofono_modem_get_data(modem);
 
 	transport = media_transport_by_codec(hfp->transports,
 						hfp->current_codec);
