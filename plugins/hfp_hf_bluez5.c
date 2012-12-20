@@ -1021,7 +1021,7 @@ static int sco_init(void)
 
 	sco_watch = g_io_add_watch(sco_io, cond, sco_accept, NULL);
 
-	return err;
+	return 0;
 }
 
 static int hfp_init(void)
