@@ -78,6 +78,7 @@ struct bt_peer {
 };
 
 static GHashTable *modem_hash = NULL;
+static GHashTable *devices_proxies = NULL;
 static GIOChannel *sco_io = NULL;
 static guint sco_watch = 0;
 static GDBusClient *bluez = NULL;
@@ -1058,7 +1059,11 @@ static void proxy_added(GDBusProxy *proxy, void *user_data)
 	interface = g_dbus_proxy_get_interface(proxy);
 	path = g_dbus_proxy_get_path(proxy);
 
-	DBG("path: %s interface: %s", path, interface);
+	if (g_str_equal(BLUEZ_DEVICE_INTERFACE, interface)) {
+		g_hash_table_insert(devices_proxies, g_strdup(path),
+						g_dbus_proxy_ref(proxy));
+		DBG("Device proxy: %s(%p)", path, proxy);
+	}
 }
 
 static void proxy_removed(GDBusProxy *proxy, void *user_data)
@@ -1068,7 +1073,10 @@ static void proxy_removed(GDBusProxy *proxy, void *user_data)
 	interface = g_dbus_proxy_get_interface(proxy);
 	path = g_dbus_proxy_get_path(proxy);
 
-	DBG("path: %s interface: %s", path, interface);
+	if (g_str_equal(BLUEZ_DEVICE_INTERFACE, interface)) {
+		g_hash_table_remove(devices_proxies, path);
+		DBG("Device proxy: %s(%p)", path, proxy);
+	}
 }
 
 static void property_changed(GDBusProxy *proxy, const char *name,
@@ -1106,7 +1114,7 @@ static int hfp_init(void)
 		return -EIO;
 	}
 
-	bluez = g_dbus_client_new(conn, BLUEZ_SERVICE, "/org/bluez");
+	bluez = g_dbus_client_new(conn, BLUEZ_SERVICE, BLUEZ_MANAGER_PATH);
 	g_dbus_client_set_connect_watch(bluez, connect_handler, NULL);
 	g_dbus_client_set_disconnect_watch(bluez, disconnect_handler, NULL);
 	g_dbus_client_set_proxy_handlers(bluez, proxy_added, proxy_removed,
@@ -1118,6 +1126,9 @@ static int hfp_init(void)
 
 	modem_hash = g_hash_table_new_full(g_str_hash, g_str_equal, g_free,
 								modem_data_free);
+
+	devices_proxies = g_hash_table_new_full(g_str_hash, g_str_equal,
+				g_free, (GDestroyNotify) g_dbus_proxy_unref);
 
 	return 0;
 }
@@ -1134,6 +1145,7 @@ static void hfp_exit(void)
 	g_dbus_client_unref(bluez);
 
 	g_hash_table_destroy(modem_hash);
+	g_hash_table_destroy(devices_proxies);
 
 	if (sco_watch)
 		g_source_remove(sco_watch);

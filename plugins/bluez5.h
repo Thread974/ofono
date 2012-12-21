@@ -22,8 +22,12 @@
 #include <stdint.h>
 #include <netinet/in.h>
 
-#define	BLUEZ_SERVICE "org.bluez"
+#define	BLUEZ_SERVICE			"org.bluez"
+#define BLUEZ_MANAGER_PATH		"/"
 #define BLUEZ_PROFILE_INTERFACE		BLUEZ_SERVICE ".Profile1"
+#define BLUEZ_PROFILE_MGMT_INTERFACE	BLUEZ_SERVICE ".ProfileManager1"
+#define BLUEZ_ADAPTER_INTERFACE		BLUEZ_SERVICE".Adapter1"
+#define BLUEZ_DEVICE_INTERFACE		BLUEZ_SERVICE".Device1"
 #define BLUEZ_ERROR_INTERFACE		BLUEZ_SERVICE ".Error"
 
 #define HFP_HS_UUID	"0000111e-0000-1000-8000-00805f9b34fb"
