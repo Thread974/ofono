@@ -682,10 +682,12 @@ static DBusMessage *profile_new_connection(DBusConnection *conn,
 					DBusMessage *msg, void *user_data)
 {
 	struct hfp *hfp;
+	DBusMessageIter iter;
+	GDBusProxy *proxy;
 	struct sockaddr_rc saddr;
 	socklen_t optlen;
 	DBusMessageIter entry;
-	const char *device;
+	const char *device, *alias;
 	GSList *endpoints = NULL;
 	guint16 version, features;
 	char device_address[18], adapter_address[18];
@@ -700,6 +702,16 @@ static DBusMessage *profile_new_connection(DBusConnection *conn,
 		goto error;
 
 	dbus_message_iter_get_basic(&entry, &device);
+
+	proxy = g_hash_table_lookup(devices_proxies, device);
+	if (proxy == NULL)
+		goto error;
+
+	if (g_dbus_proxy_get_property(proxy, "Alias", &iter) == FALSE)
+		alias = "unknown";
+	else
+		dbus_message_iter_get_basic(&iter, &alias);
+
 	dbus_message_iter_next(&entry);
 	if (dbus_message_iter_get_arg_type(&entry) != DBUS_TYPE_UNIX_FD)
 		goto error;
@@ -716,7 +728,8 @@ static DBusMessage *profile_new_connection(DBusConnection *conn,
 			"MediaEndpoints", parse_media_endpoints, &endpoints,
 			NULL);
 
-	DBG("%s version: 0x%04x feature: 0x%04x", device, version, features);
+	DBG("%s alias: %s version: 0x%04x feature: 0x%04x",
+					device, alias, version, features);
 
 	if (endpoints == NULL) {
 		ofono_error("Media Endpoint missing");
@@ -751,7 +764,7 @@ static DBusMessage *profile_new_connection(DBusConnection *conn,
 	hfp->msg = dbus_message_ref(msg);
 	hfp->current_codec = HFP_CODEC_CVSD;
 
-	err = modem_register(hfp, "unknown", fd, version);
+	err = modem_register(hfp, alias, fd, version);
 	if (err < 0 && err != -EINPROGRESS) {
 		hfp_free(hfp);
 		return g_dbus_create_error(msg,
