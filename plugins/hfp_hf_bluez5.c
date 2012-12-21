@@ -80,6 +80,7 @@ struct bt_peer {
 static GHashTable *modem_hash = NULL;
 static GIOChannel *sco_io = NULL;
 static guint sco_watch = 0;
+static GDBusClient *bluez = NULL;
 
 static void hfp_free(gpointer user_data)
 {
@@ -1024,6 +1025,63 @@ static int sco_init(void)
 	return 0;
 }
 
+static void connect_handler(DBusConnection *conn, void *user_data)
+{
+
+	DBG("Registering External Profile handler ...");
+
+	if (!g_dbus_register_interface(conn, HFP_EXT_PROFILE_PATH,
+					BLUEZ_PROFILE_INTERFACE,
+					profile_methods, NULL,
+					NULL, NULL, NULL)) {
+		ofono_error("Register Profile interface failed: %s",
+						HFP_EXT_PROFILE_PATH);
+	}
+
+	bluetooth_register_profile(conn, HFP_HS_UUID, "hfp_hf",
+						HFP_EXT_PROFILE_PATH);
+}
+
+static void disconnect_handler(DBusConnection *conn, void *user_data)
+{
+
+	DBG("Unregistering External Profile handler ...");
+
+	g_dbus_unregister_interface(conn, HFP_EXT_PROFILE_PATH,
+						BLUEZ_PROFILE_INTERFACE);
+}
+
+static void proxy_added(GDBusProxy *proxy, void *user_data)
+{
+	const char *interface, *path;
+
+	interface = g_dbus_proxy_get_interface(proxy);
+	path = g_dbus_proxy_get_path(proxy);
+
+	DBG("path: %s interface: %s", path, interface);
+}
+
+static void proxy_removed(GDBusProxy *proxy, void *user_data)
+{
+	const char *interface, *path;
+
+	interface = g_dbus_proxy_get_interface(proxy);
+	path = g_dbus_proxy_get_path(proxy);
+
+	DBG("path: %s interface: %s", path, interface);
+}
+
+static void property_changed(GDBusProxy *proxy, const char *name,
+					DBusMessageIter *iter, void *user_data)
+{
+	const char *interface, *path;
+
+	interface = g_dbus_proxy_get_interface(proxy);
+	path = g_dbus_proxy_get_path(proxy);
+
+	DBG("path: %s interface: %s", path, interface);
+}
+
 static int hfp_init(void)
 {
 	DBusConnection *conn = ofono_dbus_get_connection();
@@ -1048,21 +1106,15 @@ static int hfp_init(void)
 		return -EIO;
 	}
 
-	err = ofono_modem_driver_register(&hfp_driver);
-	if (err < 0) {
-		g_dbus_unregister_interface(conn, HFP_EXT_PROFILE_PATH,
-						BLUEZ_PROFILE_INTERFACE);
-		return err;
-	}
+	bluez = g_dbus_client_new(conn, BLUEZ_SERVICE, "/org/bluez");
+	g_dbus_client_set_connect_watch(bluez, connect_handler, NULL);
+	g_dbus_client_set_disconnect_watch(bluez, disconnect_handler, NULL);
+	g_dbus_client_set_proxy_handlers(bluez, proxy_added, proxy_removed,
+						property_changed, NULL);
 
-	err = bluetooth_register_profile(conn, HFP_HS_UUID, "hfp_hf",
-						HFP_EXT_PROFILE_PATH);
-	if (err < 0) {
-		g_dbus_unregister_interface(conn, HFP_EXT_PROFILE_PATH,
-						BLUEZ_PROFILE_INTERFACE);
-		ofono_modem_driver_unregister(&hfp_driver);
+	err = ofono_modem_driver_register(&hfp_driver);
+	if (err < 0)
 		return err;
-	}
 
 	modem_hash = g_hash_table_new_full(g_str_hash, g_str_equal, g_free,
 								modem_data_free);
@@ -1074,10 +1126,12 @@ static void hfp_exit(void)
 {
 	DBusConnection *conn = ofono_dbus_get_connection();
 
-	bluetooth_unregister_profile(conn, HFP_EXT_PROFILE_PATH);
 	g_dbus_unregister_interface(conn, HFP_EXT_PROFILE_PATH,
 						BLUEZ_PROFILE_INTERFACE);
+
 	ofono_modem_driver_unregister(&hfp_driver);
+
+	g_dbus_client_unref(bluez);
 
 	g_hash_table_destroy(modem_hash);
 
@@ -1086,6 +1140,7 @@ static void hfp_exit(void)
 
 	if (sco_io)
 		g_io_channel_unref(sco_io);
+
 }
 
 OFONO_PLUGIN_DEFINE(hfp_bluez5, "External Hands-Free Profile Plugin", VERSION,
