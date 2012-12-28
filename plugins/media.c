@@ -25,6 +25,8 @@
 
 #include <errno.h>
 #include <glib.h>
+#include <string.h>
+#include <unistd.h>
 #include <gdbus.h>
 
 #define OFONO_API_SUBJECT_TO_CHANGE
@@ -256,10 +258,15 @@ static DBusMessage *acquire_message(DBusMessage *msg, GIOChannel *io)
 {
 	guint16 imtu, omtu;
 	int fd;
+	uint8_t buf[1];
 
 	fd = g_io_channel_unix_get_fd(io);
 	imtu = 48;
 	omtu = 48;
+
+	/* Defer setup */
+	if (read(fd, buf, sizeof(buf)) < 0)
+		DBG("read(): %s(%d)", strerror(errno), errno);
 
 	return g_dbus_create_reply(msg, DBUS_TYPE_UNIX_FD, &fd,
 					DBUS_TYPE_UINT16, &imtu,
