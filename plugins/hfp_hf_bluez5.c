@@ -775,6 +775,7 @@ static DBusMessage *profile_new_connection(DBusConnection *conn,
 	return NULL;
 
 error:
+	close(fd);
 	return g_dbus_create_error(msg, BLUEZ_ERROR_INTERFACE ".Rejected",
 					"Invalid arguments in method call");
 }
