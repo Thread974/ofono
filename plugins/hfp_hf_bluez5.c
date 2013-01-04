@@ -689,7 +689,7 @@ static DBusMessage *profile_new_connection(DBusConnection *conn,
 	DBusMessageIter entry;
 	const char *device, *alias;
 	GSList *endpoints = NULL;
-	guint16 version, features;
+	guint16 version = HFP_VERSION_1_6, features = 0;
 	char device_address[18], adapter_address[18];
 	int fd, err;
 
