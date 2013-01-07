@@ -1053,8 +1053,8 @@ static void connect_handler(DBusConnection *conn, void *user_data)
 						HFP_EXT_PROFILE_PATH);
 	}
 
-	bluetooth_register_profile(conn, HFP_HS_UUID, "hfp_hf",
-						HFP_EXT_PROFILE_PATH);
+	bluetooth_register_profile(conn, HFP_HS_UUID, HFP_VERSION_1_6,
+					"hfp_hf", HFP_EXT_PROFILE_PATH);
 }
 
 static void disconnect_handler(DBusConnection *conn, void *user_data)

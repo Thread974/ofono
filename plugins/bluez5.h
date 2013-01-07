@@ -98,7 +98,7 @@ struct sco_conninfo {
 };
 
 int bluetooth_register_profile(DBusConnection *conn, const char *uuid,
-					const char *name, const char *object);
+			uint16_t version, const char *name, const char *object);
 
 void bluetooth_unregister_profile(DBusConnection *conn, const char *object);
 
