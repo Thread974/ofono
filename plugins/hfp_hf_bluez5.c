@@ -117,6 +117,23 @@ static void hfp_free(gpointer user_data)
 	g_free(hfp);
 }
 
+static void hfp_reset(struct hfp *hfp, GSList *endpoints, DBusMessage *msg,
+			const char *adapter_address, const char *device_address)
+{
+	hfp->endpoints = endpoints;
+	hfp->current_codec = HFP_CODEC_CVSD;
+
+	if (hfp->msg)
+		dbus_message_unref(hfp->msg);
+	hfp->msg = dbus_message_ref(msg);
+
+	g_free(hfp->adapter_address);
+	hfp->adapter_address = g_strdup(adapter_address);
+
+	g_free(hfp->device_address);
+	hfp->device_address = g_strdup(device_address);
+}
+
 static void modem_data_free(gpointer user_data)
 {
 	struct ofono_modem *modem = user_data;
@@ -491,33 +508,50 @@ fail:
 	return NULL;
 }
 
-static int modem_register(struct hfp *hfp, const char *alias, int fd,
-							guint16 version)
+static struct ofono_modem *modem_register(const char *device,
+						const char *alias)
 {
 	struct ofono_modem *modem;
-	guint8 *codecs;
+	struct hfp *hfp;
 	char *path;
-	int err, len;
 
-	path = g_strconcat("hfp", hfp->device_path, NULL);
+	modem = g_hash_table_lookup(modem_hash, device);
+	if (modem != NULL)
+		return modem;
+
+	path = g_strconcat("hfp", device, NULL);
 
 	modem = ofono_modem_create(path, "hfp");
 
 	g_free(path);
 
 	if (modem == NULL)
-		return -ENOMEM;
+		return NULL;
 
-	ofono_modem_set_data(modem, hfp);
 	ofono_modem_set_name(modem, alias);
 	ofono_modem_register(modem);
 
-	g_hash_table_insert(modem_hash, g_strdup(hfp->device_path), modem);
+	hfp = g_new0(struct hfp, 1);
 
-	codecs = media_endpoints_to_codecs(hfp->endpoints, &len);
+	ofono_modem_set_data(modem, hfp);
+
+	hfp->device_path = g_strdup(device);
+
+	g_hash_table_insert(modem_hash, g_strdup(device), modem);
+
+	return modem;
+}
+
+static int modem_enable(struct ofono_modem *modem, int fd,
+				uint8_t *codecs, int len,
+				guint version)
+{
+	struct hfp *hfp;
+	int err = 0;
+
+	hfp = ofono_modem_get_data(modem);
+
 	hfp_slc_info_init(&hfp->info, version, codecs, len);
-
-	g_free(codecs);
 
 	hfp->slcio = service_level_connection(modem, fd, &err);
 
@@ -692,6 +726,7 @@ static DBusMessage *profile_new_connection(DBusConnection *conn,
 					DBusMessage *msg, void *user_data)
 {
 	struct hfp *hfp;
+	struct ofono_modem *modem;
 	DBusMessageIter iter;
 	GDBusProxy *proxy;
 	struct sockaddr_rc saddr;
@@ -701,7 +736,8 @@ static DBusMessage *profile_new_connection(DBusConnection *conn,
 	GSList *endpoints = NULL;
 	guint16 version = HFP_VERSION_1_6, features = 0;
 	char device_address[18], adapter_address[18];
-	int fd, err;
+	guint8 *codecs;
+	int len, fd, err;
 
 	DBG("Profile handler NewConnection");
 
@@ -766,20 +802,23 @@ static DBusMessage *profile_new_connection(DBusConnection *conn,
 
 	bt_ba2str(&saddr.rc_bdaddr, device_address);
 
-	hfp = g_new0(struct hfp, 1);
-	hfp->device_address = g_strdup(device_address);
-	hfp->adapter_address = g_strdup(adapter_address);
-	hfp->device_path = g_strdup(device);
-	hfp->endpoints = endpoints;
-	hfp->msg = dbus_message_ref(msg);
-	hfp->current_codec = HFP_CODEC_CVSD;
+	modem = modem_register(device, alias);
+	if (modem == NULL)
+		goto error;
 
-	err = modem_register(hfp, alias, fd, version);
+	hfp = ofono_modem_get_data(modem);
+
+	hfp_reset(hfp, endpoints, msg, adapter_address, device_address);
+
+	codecs = media_endpoints_to_codecs(endpoints, &len);
+
+	err = modem_enable(modem, fd, codecs, len, version);
+
+	g_free(codecs);
+
 	if (err < 0 && err != -EINPROGRESS) {
 		hfp_free(hfp);
-		return g_dbus_create_error(msg,
-				BLUEZ_ERROR_INTERFACE ".Rejected",
-				"%s", strerror(-err));
+		goto error;
 	}
 
 	return NULL;
