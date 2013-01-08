@@ -162,7 +162,8 @@ done:
 }
 
 int bluetooth_register_profile(DBusConnection *conn, const char *uuid,
-			uint16_t version, const char *name, const char *object)
+					uint16_t version, uint16_t features,
+					const char *name, const char *object)
 {
 	DBusMessageIter iter, dict;
 	DBusPendingCall *c;
@@ -183,6 +184,10 @@ int bluetooth_register_profile(DBusConnection *conn, const char *uuid,
 	if (version)
 		ofono_dbus_dict_append(&dict, "Version",
 					DBUS_TYPE_UINT16, &version);
+
+	if (features)
+		ofono_dbus_dict_append(&dict, "Features",
+					DBUS_TYPE_UINT16, &features);
 
 	dbus_message_iter_close_container(&iter, &dict);
 

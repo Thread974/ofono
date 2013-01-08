@@ -58,6 +58,16 @@
 
 #define HFP_EXT_PROFILE_PATH   "/bluetooth/profile/hfp_hf"
 
+/* HFP 1.6 SPEC page 95: “SupportedFeatures” table */
+enum sdp_supported_features {
+	HF_SDP_FEATURE_ECNR = 0x01,
+	HF_SDP_FEATURE_3WAY = 0x02,
+	HF_SDP_FEATURE_CLIP = 0x04,
+	HF_SDP_FEATURE_VOICE_RECOGNITION = 0x08,
+	HF_SDP_FEATURE_REMOTE_VOLUME_CONTROL = 0x10,
+	HF_SDP_FEATURE_WBS = 0x20,
+};
+
 struct hfp {
 	char *device_address;
 	char *device_path;
@@ -1042,6 +1052,11 @@ static int sco_init(void)
 
 static void connect_handler(DBusConnection *conn, void *user_data)
 {
+	uint16_t features = HF_SDP_FEATURE_3WAY |
+				HF_SDP_FEATURE_CLIP |
+				HF_SDP_FEATURE_WBS |
+				HF_SDP_FEATURE_VOICE_RECOGNITION |
+				HF_SDP_FEATURE_REMOTE_VOLUME_CONTROL;
 
 	DBG("Registering External Profile handler ...");
 
@@ -1054,7 +1069,7 @@ static void connect_handler(DBusConnection *conn, void *user_data)
 	}
 
 	bluetooth_register_profile(conn, HFP_HS_UUID, HFP_VERSION_1_6,
-					"hfp_hf", HFP_EXT_PROFILE_PATH);
+				features, "hfp_hf", HFP_EXT_PROFILE_PATH);
 }
 
 static void disconnect_handler(DBusConnection *conn, void *user_data)
