@@ -608,6 +608,27 @@ static void parse_byte_array(DBusMessageIter *iter, gpointer user_data)
 	*garray = g_array_append_vals(*garray, (gconstpointer) data, n);
 }
 
+static void parse_uuids(DBusMessageIter *array, gpointer user_data)
+{
+	GSList **uuids = user_data;
+	DBusMessageIter value;
+
+	if (dbus_message_iter_get_arg_type(array) != DBUS_TYPE_ARRAY)
+		return;
+
+	dbus_message_iter_recurse(array, &value);
+
+	while (dbus_message_iter_get_arg_type(&value) == DBUS_TYPE_STRING) {
+		const char *uuid;
+
+		dbus_message_iter_get_basic(&value, &uuid);
+
+		*uuids = g_slist_prepend(*uuids, g_strdup(uuid));
+
+		dbus_message_iter_next(&value);
+	}
+}
+
 static void parse_media_endpoints(DBusMessageIter *array, gpointer user_data)
 {
 	const char *path, *owner;
@@ -1122,16 +1143,43 @@ static void disconnect_handler(DBusConnection *conn, void *user_data)
 
 static void proxy_added(GDBusProxy *proxy, void *user_data)
 {
-	const char *interface, *path;
+	const char *interface, *path, *alias;
+	DBusMessageIter iter;
+	GSList *l, *uuids = NULL;
 
 	interface = g_dbus_proxy_get_interface(proxy);
 	path = g_dbus_proxy_get_path(proxy);
 
-	if (g_str_equal(BLUEZ_DEVICE_INTERFACE, interface)) {
-		g_hash_table_insert(devices_proxies, g_strdup(path),
+	if (g_str_equal(BLUEZ_DEVICE_INTERFACE, interface) == FALSE)
+		return;
+
+	g_hash_table_insert(devices_proxies, g_strdup(path),
 						g_dbus_proxy_ref(proxy));
-		DBG("Device proxy: %s(%p)", path, proxy);
+	DBG("Device proxy: %s(%p)", path, proxy);
+
+	if (g_dbus_proxy_get_property(proxy, "UUIDs", &iter) == FALSE)
+		return;
+
+	parse_uuids(&iter, &uuids);
+
+	for (l = uuids; l; l = l->next) {
+		const char *uuid = l->data;
+
+		if (g_str_equal(uuid, HFP_AG_UUID) == TRUE)
+			break;
 	}
+
+	g_slist_free_full(uuids, g_free);
+
+	if (l == NULL)
+		return;
+
+	if (g_dbus_proxy_get_property(proxy, "Alias", &iter) == FALSE)
+		return;
+
+	dbus_message_iter_get_basic(&iter, &alias);
+
+	modem_register(path, alias);
 }
 
 static void proxy_removed(GDBusProxy *proxy, void *user_data)
