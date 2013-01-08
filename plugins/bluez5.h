@@ -106,3 +106,13 @@ void bluetooth_unregister_profile(DBusConnection *conn, const char *object);
 
 void bluetooth_iter_parse_properties(DBusMessageIter *array,
 						const char *property, ...);
+
+typedef void (*bluetooth_finish_cb)(gboolean success, gpointer user_data);
+
+void bluetooth_connect_profile(DBusConnection *conn,
+				const char *device, const char *uuid,
+				bluetooth_finish_cb cb, gpointer user_data);
+
+void bluetooth_disconnect_profile(DBusConnection *conn,
+				const char *device, const char *uuid,
+				bluetooth_finish_cb cb, gpointer user_data);
