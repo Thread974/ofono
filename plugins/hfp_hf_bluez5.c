@@ -680,6 +680,16 @@ static void parse_media_endpoints(DBusMessageIter *array, gpointer user_data)
 	}
 }
 
+static void connect_cb(gboolean success, gpointer user_data)
+{
+	struct ofono_modem *modem = user_data;
+
+	if (success)
+		return;
+
+	ofono_modem_set_powered(modem, FALSE);
+}
+
 static int hfp_probe(struct ofono_modem *modem)
 {
 	DBG("modem: %p", modem);
@@ -695,23 +705,38 @@ static void hfp_remove(struct ofono_modem *modem)
 /* power up hardware */
 static int hfp_enable(struct ofono_modem *modem)
 {
+	struct hfp *hfp;
+
 	DBG("%p", modem);
 
 	if (ofono_modem_get_powered(modem))
 		return 0;
 
-	ofono_modem_set_powered(modem, TRUE);
+	hfp = ofono_modem_get_data(modem);
 
-	return 0;
+	bluetooth_connect_profile(ofono_dbus_get_connection(),
+					hfp->device_path, HFP_AG_UUID,
+					connect_cb, modem);
+
+	return -EINPROGRESS;
 }
 
 static int hfp_disable(struct ofono_modem *modem)
 {
+	struct hfp *hfp;
+
 	DBG("%p", modem);
 
-	ofono_modem_set_powered(modem, FALSE);
+	if (ofono_modem_get_powered(modem) == FALSE)
+		return 0;
 
-	return 0;
+	hfp = ofono_modem_get_data(modem);
+
+	bluetooth_disconnect_profile(ofono_dbus_get_connection(),
+					hfp->device_path, HFP_AG_UUID,
+					NULL, NULL);
+
+	return -EINPROGRESS;
 }
 
 static void hfp_pre_sim(struct ofono_modem *modem)
