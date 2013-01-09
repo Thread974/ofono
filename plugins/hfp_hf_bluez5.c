@@ -462,8 +462,6 @@ static void hfp_disconnected_cb(gpointer user_data)
 	hfp->transports = NULL;
 
 	ofono_modem_set_powered(modem, FALSE);
-	g_hash_table_remove(modem_hash, hfp->device_path);
-	ofono_modem_remove(modem);
 }
 
 static GIOChannel *service_level_connection(struct ofono_modem *modem, int fd, int *err)
@@ -1210,6 +1208,7 @@ static void proxy_added(GDBusProxy *proxy, void *user_data)
 static void proxy_removed(GDBusProxy *proxy, void *user_data)
 {
 	const char *interface, *path;
+	struct ofono_modem *modem;
 
 	interface = g_dbus_proxy_get_interface(proxy);
 	path = g_dbus_proxy_get_path(proxy);
@@ -1218,6 +1217,13 @@ static void proxy_removed(GDBusProxy *proxy, void *user_data)
 		g_hash_table_remove(devices_proxies, path);
 		DBG("Device proxy: %s(%p)", path, proxy);
 	}
+
+	modem = g_hash_table_lookup(modem_hash, path);
+	if (modem == NULL)
+		return;
+
+	g_hash_table_remove(modem_hash, path);
+	ofono_modem_remove(modem);
 }
 
 static void property_changed(GDBusProxy *proxy, const char *name,
