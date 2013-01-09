@@ -176,8 +176,8 @@ static gboolean modem_address_cmp(gpointer key, gpointer value, gpointer user_da
 	struct ofono_modem *modem = value;
 	struct hfp *hfp = ofono_modem_get_data(modem);
 
-	return (g_str_equal(hfp->device_address, peer->dst) &&
-			g_str_equal(hfp->adapter_address, peer->src));
+	return (g_strcmp0(hfp->device_address, peer->dst) == 0 &&
+			g_strcmp0(hfp->adapter_address, peer->src) == 0);
 }
 
 static void sco_watch_destroy(gpointer user_data)
