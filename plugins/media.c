@@ -283,15 +283,13 @@ static DBusMessage *acquire(DBusConnection *conn, DBusMessage *msg,
 
 	sender = dbus_message_get_sender(msg);
 
-	if (!g_str_equal(sender, endpoint->owner))
+	DBG("sender %s owner %s", sender, endpoint->owner);
+
+	if (!g_str_equal(sender, endpoint->owner) ||
+			transport->state == STATE_ACTIVE || transport->pending)
 		return g_dbus_create_error(msg, ERROR_INTERFACE
 						".NotAuthorized",
 						"Operation not authorized");
-
-	if (transport->state == STATE_ACTIVE)
-		return g_dbus_create_error(msg, ERROR_INTERFACE
-					".InProgress",
-					"Operation already in progress");
 
 	if (transport->state == STATE_PENDING) {
 		transport_set_state(transport, STATE_ACTIVE);
@@ -321,15 +319,11 @@ static DBusMessage *try_acquire(DBusConnection *conn, DBusMessage *msg,
 
 	DBG("sender %s owner %s", sender, endpoint->owner);
 
-	if (!g_str_equal(sender, endpoint->owner))
+	if (!g_str_equal(sender, endpoint->owner) ||
+					transport->state == STATE_ACTIVE)
 		return g_dbus_create_error(msg, ERROR_INTERFACE
 						".NotAuthorized",
 						"Operation not authorized");
-
-	if (transport->state == STATE_ACTIVE)
-		return g_dbus_create_error(msg, ERROR_INTERFACE
-					".InProgress",
-					"Operation already in progress");
 
 	if (transport->state == STATE_PENDING) {
 		transport_set_state(transport, STATE_ACTIVE);
