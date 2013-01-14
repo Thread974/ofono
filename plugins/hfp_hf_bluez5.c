@@ -998,6 +998,8 @@ static gboolean sco_set_codec(int sk, uint8_t codec)
 							strerror(err), err);
 		return FALSE;
 	}
+	recv(sk, &options, sizeof(options), 0);
+	DBG("SCO: Force recv on transparent SCO");
 
 	return TRUE;
 }
