@@ -60,6 +60,8 @@
 
 struct hfp {
 	struct hfp_slc_info info;
+	GIOChannel *sco_io;
+	guint sco_watch;
 	DBusMessage *msg;
 };
 
@@ -208,6 +210,12 @@ static void hfp_remove(struct ofono_modem *modem)
 		dbus_message_unref(hfp->msg);
 
 	g_at_chat_unref(info->chat);
+
+	if (hfp->sco_watch > 0)
+		g_source_remove(hfp->sco_watch);
+
+	if (hfp->sco_io)
+		g_io_channel_unref(hfp->sco_io);
 
 	g_free(hfp);
 
@@ -450,10 +458,27 @@ static ofono_bool_t slc_match(struct ofono_modem *modem, void *userdata)
 	return g_str_equal(remote, value);
 }
 
+static gboolean sco_channel_watch(GIOChannel *io, GIOCondition cond,
+							gpointer user_data)
+{
+	struct hfp *hfp = user_data;
+
+	hfp->sco_watch = 0;
+
+	g_io_channel_unref(hfp->sco_io);
+	hfp->sco_io = NULL;
+
+	/* TODO: Change transport state */
+
+	return FALSE;
+}
+
 static gboolean sco_accept(GIOChannel *io, GIOCondition cond,
 							gpointer user_data)
 {
 	struct sockaddr_sco saddr;
+	struct ofono_modem *modem;
+	struct hfp *hfp;
 	socklen_t alen;
 	int sk, nsk;
 	char remote[18];
@@ -472,11 +497,18 @@ static gboolean sco_accept(GIOChannel *io, GIOCondition cond,
 
 	bt_ba2str(&saddr.sco_bdaddr, remote);
 
-	if (ofono_modem_find(slc_match, remote) == NULL) {
+	modem = ofono_modem_find(slc_match, remote);
+	if (modem == NULL) {
 		ofono_error("Rejecting SCO: No SLC connection found!");
 		close(nsk);
 		return TRUE;
 	}
+
+	hfp = ofono_modem_get_data(modem);
+	hfp->sco_io = g_io_channel_unix_new(nsk);
+	hfp->sco_watch = g_io_add_watch(hfp->sco_io,
+					G_IO_HUP | G_IO_ERR | G_IO_NVAL,
+					sco_channel_watch, hfp);
 
 	return TRUE;
 }
