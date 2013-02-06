@@ -43,6 +43,32 @@
 
 #define BLUEZ_PROFILE_MGMT_INTERFACE   BLUEZ_SERVICE ".ProfileManager1"
 
+struct bt_endpoint {
+	char *owner;
+	char *path;
+	uint8_t codec;
+};
+
+void bt_endpoint_free(struct bt_endpoint *endpoint)
+{
+	g_free(endpoint->owner);
+	g_free(endpoint->path);
+	g_free(endpoint);
+}
+
+static struct bt_endpoint *endpoint_new(const char *owner, const char *path,
+								uint8_t codec)
+{
+	struct bt_endpoint *endpoint;
+
+	endpoint = g_new0(struct bt_endpoint, 1);
+	endpoint->owner = g_strdup(owner);
+	endpoint->path = g_strdup(path);
+	endpoint->codec = codec;
+
+	return endpoint;
+}
+
 static guint sco_watch;
 static GSList *sco_cbs;
 
@@ -56,12 +82,84 @@ static void parse_uint16(DBusMessageIter *iter, gpointer user_data)
 	dbus_message_iter_get_basic(iter, value);
 }
 
+static void parse_string(DBusMessageIter *iter, gpointer user_data)
+{
+	char **str = user_data;
+	int arg_type = dbus_message_iter_get_arg_type(iter);
+
+	if (arg_type != DBUS_TYPE_OBJECT_PATH && arg_type != DBUS_TYPE_STRING)
+		return;
+
+	dbus_message_iter_get_basic(iter, str);
+}
+
+static void parse_byte(DBusMessageIter *iter, gpointer user_data)
+{
+	guint8 *value = user_data;
+
+	if (dbus_message_iter_get_arg_type(iter) !=  DBUS_TYPE_BYTE)
+		return;
+
+	dbus_message_iter_get_basic(iter, value);
+}
+
+static void parse_endpoints(DBusMessageIter *array, gpointer user_data)
+{
+	GSList **endpoints = user_data;
+	struct bt_endpoint *endpoint;
+	const char *path, *owner;
+	guint8 codec;
+	DBusMessageIter dict, variant, entry;
+
+	if (dbus_message_iter_get_arg_type(array) != DBUS_TYPE_ARRAY)
+		return;
+
+	dbus_message_iter_recurse(array, &dict);
+
+	while (dbus_message_iter_get_arg_type(&dict) == DBUS_TYPE_DICT_ENTRY) {
+		path = NULL;
+		codec = 0x00;
+
+		dbus_message_iter_recurse(&dict, &entry);
+		if (dbus_message_iter_get_arg_type(&entry) != DBUS_TYPE_STRING)
+			return;
+
+		dbus_message_iter_get_basic(&entry, &owner);
+
+		dbus_message_iter_next(&entry);
+
+		if (dbus_message_iter_get_arg_type(&entry) != DBUS_TYPE_VARIANT)
+			return;
+
+		dbus_message_iter_recurse(&entry, &variant);
+
+		ofono_dbus_iter_parse_properties(&variant,
+				"Path", parse_string, &path,
+				"Codec", parse_byte, &codec,
+				NULL);
+
+		dbus_message_iter_next(&dict);
+
+		endpoint = endpoint_new(owner, path, codec);
+		*endpoints = g_slist_append(*endpoints, endpoint);
+
+		DBG("Media Endpoint %s %s codec: 0x%02X", owner, path, codec);
+	}
+}
+
 int bt_parse_fd_properties(DBusMessageIter *iter, uint16_t *version,
-							uint16_t *features)
+				uint16_t *features, GSList **endpoints)
 {
 	uint16_t ver = 0, feat = 0;
 
-	ofono_dbus_iter_parse_properties(iter,
+	if (endpoints)
+		ofono_dbus_iter_parse_properties(iter,
+				"Version", parse_uint16, &ver,
+				"Features", parse_uint16, &feat,
+				"MediaEndpoints", parse_endpoints, endpoints,
+				NULL);
+	else
+		ofono_dbus_iter_parse_properties(iter,
 				"Version", parse_uint16, &ver,
 				"Features", parse_uint16, &feat,
 				NULL);

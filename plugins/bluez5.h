@@ -69,8 +69,12 @@ int bt_ba2str(const bdaddr_t *ba, char *str);
 
 int bt_bacmp(const bdaddr_t *ba1, const bdaddr_t *ba2);
 
+struct bt_endpoint;
+
+void bt_endpoint_free(struct bt_endpoint *endpoint);
+
 int bt_parse_fd_properties(DBusMessageIter *iter, uint16_t *version,
-							uint16_t *features);
+					uint16_t *features, GSList **endpoints);
 
 typedef gboolean (*bt_sco_accept_cb)(int fd, struct sockaddr_sco *saddr);
 
