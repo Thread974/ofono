@@ -69,6 +69,9 @@ int bt_ba2str(const bdaddr_t *ba, char *str);
 
 int bt_bacmp(const bdaddr_t *ba1, const bdaddr_t *ba2);
 
+int bt_parse_fd_properties(DBusMessageIter *iter, uint16_t *version,
+							uint16_t *features);
+
 typedef gboolean (*bt_sco_accept_cb)(int fd, struct sockaddr_sco *saddr);
 
 int bt_register_sco_server(bt_sco_accept_cb cb);

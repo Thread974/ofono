@@ -46,6 +46,35 @@
 static guint sco_watch;
 static GSList *sco_cbs;
 
+static void parse_uint16(DBusMessageIter *iter, gpointer user_data)
+{
+	uint16_t *value = user_data;
+
+	if (dbus_message_iter_get_arg_type(iter) !=  DBUS_TYPE_UINT16)
+		return;
+
+	dbus_message_iter_get_basic(iter, value);
+}
+
+int bt_parse_fd_properties(DBusMessageIter *iter, uint16_t *version,
+							uint16_t *features)
+{
+	uint16_t ver = 0, feat = 0;
+
+	ofono_dbus_iter_parse_properties(iter,
+				"Version", parse_uint16, &ver,
+				"Features", parse_uint16, &feat,
+				NULL);
+
+	if (version)
+		*version = ver;
+
+	if (features)
+		*features = feat;
+
+	return 0;
+}
+
 void bt_bacpy(bdaddr_t *dst, const bdaddr_t *src)
 {
 	memcpy(dst, src, sizeof(bdaddr_t));
