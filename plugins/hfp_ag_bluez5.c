@@ -44,6 +44,8 @@
 
 #define HFP_AG_EXT_PROFILE_PATH   "/bluetooth/profile/hfp_ag"
 
+#define HFP_VERSION_1_6		0x0106
+
 struct hfp_ag {
 	struct ofono_emulator *em;
 	bdaddr_t local;
@@ -69,7 +71,8 @@ static void free_hfp_ag(void *data)
 	if (hfp_ag->sco_watch)
 		g_source_remove(hfp_ag->sco_watch);
 
-	g_slist_free_full(hfp_ag->endpoints, (GDestroyNotify)bt_endpoint_free);
+	g_slist_free_full(hfp_ag->endpoints,
+					(GDestroyNotify) bt_endpoint_unref);
 
 	hfp_ags = g_slist_remove(hfp_ags, hfp_ag);
 	g_free(hfp_ag);
@@ -122,7 +125,7 @@ static DBusMessage *profile_new_connection(DBusConnection *conn,
 	if (getsockname(fd, (struct sockaddr *) &saddr, &optlen) < 0) {
 		ofono_error("RFCOMM getsockname(): %s (%d)", strerror(errno),
 									errno);
-		g_slist_free_full(endpoints, (GDestroyNotify)bt_endpoint_free);
+		g_slist_free_full(endpoints, (GDestroyNotify)bt_endpoint_unref);
 		goto error;
 	}
 
@@ -133,7 +136,7 @@ static DBusMessage *profile_new_connection(DBusConnection *conn,
 	if (getpeername(fd, (struct sockaddr *) &saddr, &optlen) < 0) {
 		ofono_error("RFCOMM getpeername(): %s (%d)", strerror(errno),
 									errno);
-		g_slist_free_full(endpoints, (GDestroyNotify)bt_endpoint_free);
+		g_slist_free_full(endpoints, (GDestroyNotify)bt_endpoint_unref);
 		goto error;
 	}
 
@@ -142,7 +145,8 @@ static DBusMessage *profile_new_connection(DBusConnection *conn,
 	/* Pick the first voicecall capable modem */
 	modem = modems->data;
 	if (modem == NULL) {
-		g_slist_free_full(endpoints, (GDestroyNotify)bt_endpoint_free);
+		g_slist_free_full(endpoints,
+					(GDestroyNotify) bt_endpoint_unref);
 		close(fd);
 		return g_dbus_create_error(msg, BLUEZ_ERROR_INTERFACE
 						".Rejected",
@@ -153,7 +157,8 @@ static DBusMessage *profile_new_connection(DBusConnection *conn,
 
 	em = ofono_emulator_create(modem, OFONO_EMULATOR_TYPE_HFP);
 	if (em == NULL) {
-		g_slist_free_full(endpoints, (GDestroyNotify)bt_endpoint_free);
+		g_slist_free_full(endpoints,
+					(GDestroyNotify) bt_endpoint_unref);
 		close(fd);
 		return g_dbus_create_error(msg, BLUEZ_ERROR_INTERFACE
 						".Rejected",
@@ -327,8 +332,8 @@ static void sim_state_watch(enum ofono_sim_state new_state, void *data)
 	if (modems->next != NULL)
 		return;
 
-	bluetooth_register_profile(conn, HFP_AG_UUID, "hfp_ag",
-						HFP_AG_EXT_PROFILE_PATH);
+	bluetooth_register_profile(conn, HFP_AG_UUID, HFP_VERSION_1_6,
+					0, "hfp_ag", HFP_AG_EXT_PROFILE_PATH);
 
 	bt_register_sco_server(hfp_ag_sco_accept);
 }

@@ -22,6 +22,8 @@
 #define BLUEZ_SERVICE			"org.bluez"
 #define BLUEZ_MANAGER_PATH		"/"
 #define BLUEZ_PROFILE_INTERFACE		BLUEZ_SERVICE ".Profile1"
+#define BLUEZ_PROFILE_MGMT_INTERFACE	BLUEZ_SERVICE ".ProfileManager1"
+#define BLUEZ_ADAPTER_INTERFACE		BLUEZ_SERVICE ".Adapter1"
 #define BLUEZ_DEVICE_INTERFACE		BLUEZ_SERVICE ".Device1"
 #define BLUEZ_ERROR_INTERFACE		BLUEZ_SERVICE ".Error"
 
@@ -69,19 +71,50 @@ int bt_ba2str(const bdaddr_t *ba, char *str);
 
 int bt_bacmp(const bdaddr_t *ba1, const bdaddr_t *ba2);
 
-struct bt_endpoint;
-
-void bt_endpoint_free(struct bt_endpoint *endpoint);
-
-int bt_parse_fd_properties(DBusMessageIter *iter, uint16_t *version,
-					uint16_t *features, GSList **endpoints);
-
 typedef gboolean (*bt_sco_accept_cb)(int fd, struct sockaddr_sco *saddr);
 
 int bt_register_sco_server(bt_sco_accept_cb cb);
 void bt_unregister_sco_server(bt_sco_accept_cb cb);
 
+struct bt_endpoint;
+struct bt_transport;
+
+typedef void (*bt_initiate_audio)(struct bt_transport *transport,
+							gpointer user_data);
+
+struct bt_endpoint *bt_endpoint_ref(struct bt_endpoint *endpoint);
+void bt_endpoint_unref(struct bt_endpoint *endpoint);
+
+int bt_parse_fd_properties(DBusMessageIter *iter, uint16_t *version,
+					uint16_t *features, GSList **endpoints);
+
+guint8 *bt_endpoints_to_codecs(GSList *endpoints, int *len);
+
+void bt_transport_mic_volume_changed(void *userdata);
+void bt_transport_speaker_volume_changed(void *userdata);
+
+struct bt_transport *bt_transport_new(const char *device,
+					struct bt_endpoint *endpoint,
+					bt_initiate_audio init_audio,
+					gpointer user_data);
+
+struct bt_transport *bt_transport_ref(struct bt_transport *transport);
+void bt_transport_unref(struct bt_transport *transport);
+
+struct bt_transport *bt_transport_by_codec(GSList *transports,
+							guint8 codec);
+
+int bt_transport_register(struct bt_transport *transport,
+					DBusPendingCallNotifyFunction cb,
+					gpointer user_data);
+
+void bt_transport_unregister(struct bt_transport *transport);
+
+gboolean bt_transport_set_channel(struct bt_transport *transport,
+							GIOChannel *io);
+
 int bluetooth_register_profile(DBusConnection *conn, const char *uuid,
+					uint16_t version, uint16_t features,
 					const char *name, const char *object);
 
 void bluetooth_unregister_profile(DBusConnection *conn, const char *object);
