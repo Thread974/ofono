@@ -52,6 +52,8 @@ struct ofono_emulator {
 	gboolean clip;
 	gboolean ccwa;
 	int pns_id;
+	void *data;
+	ofono_destroy_func destroy;
 };
 
 struct indicator {
@@ -951,6 +953,9 @@ static void emulator_remove(struct ofono_atom *atom)
 
 	DBG("atom: %p", atom);
 
+	if (em->destroy)
+		em->destroy(em->data);
+
 	g_free(em);
 }
 
@@ -992,6 +997,18 @@ struct ofono_emulator *ofono_emulator_create(struct ofono_modem *modem,
 void ofono_emulator_remove(struct ofono_emulator *em)
 {
 	__ofono_atom_free(em->atom);
+}
+
+void ofono_emulator_set_data(struct ofono_emulator *em, void *data,
+						ofono_destroy_func destroy)
+{
+	em->data = data;
+	em->destroy = destroy;
+}
+
+void *ofono_emulator_get_data(struct ofono_emulator *em)
+{
+	return em->data;
 }
 
 void ofono_emulator_send_final(struct ofono_emulator *em,
