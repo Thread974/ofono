@@ -74,6 +74,11 @@ void ofono_emulator_register(struct ofono_emulator *em, int fd);
 
 void ofono_emulator_remove(struct ofono_emulator *em);
 
+void ofono_emulator_set_data(struct ofono_emulator *em, void *data,
+						ofono_destroy_func destroy);
+
+void *ofono_emulator_get_data(struct ofono_emulator *em);
+
 void ofono_emulator_send_final(struct ofono_emulator *em,
 				const struct ofono_error *final);
 void ofono_emulator_send_unsolicited(struct ofono_emulator *em,
