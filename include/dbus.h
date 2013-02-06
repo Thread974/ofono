@@ -100,6 +100,12 @@ int ofono_dbus_signal_dict_property_changed(DBusConnection *conn,
 						const char *name, int type,
 						void *value);
 
+typedef void (*property_handler_cb)(DBusMessageIter *iter, void *user_data);
+
+void ofono_dbus_iter_parse_properties(DBusMessageIter *array,
+				const char *property, property_handler_cb cb,
+				void *user_data, ...);
+
 #ifdef __cplusplus
 }
 #endif

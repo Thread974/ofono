@@ -30,6 +30,12 @@
 
 #define OFONO_ERROR_INTERFACE "org.ofono.Error"
 
+struct property_handler {
+	const char *property;
+	property_handler_cb callback;
+	void *user_data;
+};
+
 static DBusConnection *g_connection;
 
 struct error_mapping_entry {
@@ -271,6 +277,88 @@ int ofono_dbus_signal_dict_property_changed(DBusConnection *conn,
 	append_dict_variant(&iter, type, value);
 
 	return g_dbus_send_message(conn, signal);
+}
+
+static gint property_handler_compare(gconstpointer a, gconstpointer b)
+{
+	const struct property_handler *handler = a;
+	const char *property = b;
+
+	return g_strcmp0(handler->property, property);
+}
+
+void ofono_dbus_iter_parse_properties(DBusMessageIter *array,
+				const char *property, property_handler_cb cb,
+				void *user_data, ...)
+{
+	va_list args;
+	GSList *prop_handlers = NULL;
+	DBusMessageIter dict;
+
+	if (dbus_message_iter_get_arg_type(array) != DBUS_TYPE_ARRAY)
+		goto done;
+
+	va_start(args, user_data);
+
+	if (property == NULL)
+		return;
+
+	while (1) {
+		struct property_handler *handler =
+					g_new0(struct property_handler, 1);
+
+		handler->property = property;
+		handler->callback = cb;
+		handler->user_data = user_data;
+
+		prop_handlers = g_slist_prepend(prop_handlers, handler);
+
+		property = va_arg(args, const char *);
+		if (property == NULL)
+			break;
+
+		cb = va_arg(args, property_handler_cb);
+		user_data = va_arg(args, void *);
+	}
+
+	va_end(args);
+
+	dbus_message_iter_recurse(array, &dict);
+
+	while (dbus_message_iter_get_arg_type(&dict) == DBUS_TYPE_DICT_ENTRY) {
+		DBusMessageIter entry, value;
+		const char *key;
+		GSList *l;
+
+		dbus_message_iter_recurse(&dict, &entry);
+
+		if (dbus_message_iter_get_arg_type(&entry) != DBUS_TYPE_STRING)
+			goto done;
+
+		dbus_message_iter_get_basic(&entry, &key);
+
+		dbus_message_iter_next(&entry);
+
+		if (dbus_message_iter_get_arg_type(&entry) != DBUS_TYPE_VARIANT)
+			goto done;
+
+		dbus_message_iter_recurse(&entry, &value);
+
+		l = g_slist_find_custom(prop_handlers, key,
+					property_handler_compare);
+
+		if (l) {
+			struct property_handler *handler = l->data;
+
+			handler->callback(&value, handler->user_data);
+		}
+
+		dbus_message_iter_next(&dict);
+	}
+
+done:
+	g_slist_foreach(prop_handlers, (GFunc) g_free, NULL);
+	g_slist_free(prop_handlers);
 }
 
 DBusMessage *__ofono_error_invalid_args(DBusMessage *msg)
