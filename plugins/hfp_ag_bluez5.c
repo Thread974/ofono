@@ -44,9 +44,29 @@
 
 #define HFP_AG_EXT_PROFILE_PATH   "/bluetooth/profile/hfp_ag"
 
+struct hfp_ag {
+	struct ofono_emulator *em;
+	bdaddr_t local;
+	bdaddr_t peer;
+};
+
 static guint modemwatch_id;
 static GList *modems;
 static GHashTable *sim_hash = NULL;
+static GSList *hfp_ags;
+
+static void free_hfp_ag(void *data)
+{
+	struct hfp_ag *hfp_ag = data;
+
+	DBG("");
+
+	if (hfp_ag == NULL)
+		return;
+
+	hfp_ags = g_slist_remove(hfp_ags, hfp_ag);
+	g_free(hfp_ag);
+}
 
 static DBusMessage *profile_new_connection(DBusConnection *conn,
 						DBusMessage *msg, void *data)
@@ -54,8 +74,13 @@ static DBusMessage *profile_new_connection(DBusConnection *conn,
 	DBusMessageIter entry;
 	const char *device;
 	int fd;
+	struct sockaddr_rc saddr;
+	bdaddr_t local;
+	bdaddr_t peer;
+	socklen_t optlen;
 	struct ofono_emulator *em;
 	struct ofono_modem *modem;
+	struct hfp_ag *hfp_ag;
 
 	DBG("Profile handler NewConnection");
 
@@ -79,6 +104,26 @@ static DBusMessage *profile_new_connection(DBusConnection *conn,
 
 	DBG("%s", device);
 
+	memset(&saddr, 0, sizeof(saddr));
+	optlen = sizeof(saddr);
+	if (getsockname(fd, (struct sockaddr *) &saddr, &optlen) < 0) {
+		ofono_error("RFCOMM getsockname(): %s (%d)", strerror(errno),
+									errno);
+		goto error;
+	}
+
+	local = saddr.rc_bdaddr;
+
+	memset(&saddr, 0, sizeof(saddr));
+	optlen = sizeof(saddr);
+	if (getpeername(fd, (struct sockaddr *) &saddr, &optlen) < 0) {
+		ofono_error("RFCOMM getpeername(): %s (%d)", strerror(errno),
+									errno);
+		goto error;
+	}
+
+	peer = saddr.rc_bdaddr;
+
 	/* Pick the first voicecall capable modem */
 	modem = modems->data;
 	if (modem == NULL) {
@@ -100,7 +145,18 @@ static DBusMessage *profile_new_connection(DBusConnection *conn,
 
 	ofono_emulator_register(em, fd);
 
+	hfp_ag = g_new0(struct hfp_ag, 1);
+	hfp_ag->em = em;
+	hfp_ag->local = local;
+	hfp_ag->peer = peer;
+	ofono_emulator_set_data(em, hfp_ag, free_hfp_ag);
+
+	hfp_ags = g_slist_append(hfp_ags, hfp_ag);
+
 	return dbus_message_new_method_return(msg);
+
+error:
+	close(fd);
 
 invalid:
 	return g_dbus_create_error(msg, BLUEZ_ERROR_INTERFACE ".Rejected",
