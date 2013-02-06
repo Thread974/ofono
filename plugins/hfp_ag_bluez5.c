@@ -49,6 +49,7 @@ struct hfp_ag {
 	bdaddr_t local;
 	bdaddr_t peer;
 	guint sco_watch;
+	GSList *endpoints;		/* Remote Media endpoints objects */
 };
 
 static guint modemwatch_id;
@@ -68,6 +69,8 @@ static void free_hfp_ag(void *data)
 	if (hfp_ag->sco_watch)
 		g_source_remove(hfp_ag->sco_watch);
 
+	g_slist_free_full(hfp_ag->endpoints, (GDestroyNotify)bt_endpoint_free);
+
 	hfp_ags = g_slist_remove(hfp_ags, hfp_ag);
 	g_free(hfp_ag);
 }
@@ -80,6 +83,7 @@ static DBusMessage *profile_new_connection(DBusConnection *conn,
 	int fd;
 	guint16 version = 0;
 	guint16 features = 0;
+	GSList *endpoints = NULL;
 	struct sockaddr_rc saddr;
 	bdaddr_t local;
 	bdaddr_t peer;
@@ -108,7 +112,7 @@ static DBusMessage *profile_new_connection(DBusConnection *conn,
 	if (fd < 0)
 		goto invalid;
 
-	if (bt_parse_fd_properties(&entry, &version, &features, NULL) < 0)
+	if (bt_parse_fd_properties(&entry, &version, &features, &endpoints) < 0)
 		goto error;
 
 	DBG("%s version: 0x%04x features: 0x%04x", device, version, features);
@@ -118,6 +122,7 @@ static DBusMessage *profile_new_connection(DBusConnection *conn,
 	if (getsockname(fd, (struct sockaddr *) &saddr, &optlen) < 0) {
 		ofono_error("RFCOMM getsockname(): %s (%d)", strerror(errno),
 									errno);
+		g_slist_free_full(endpoints, (GDestroyNotify)bt_endpoint_free);
 		goto error;
 	}
 
@@ -128,6 +133,7 @@ static DBusMessage *profile_new_connection(DBusConnection *conn,
 	if (getpeername(fd, (struct sockaddr *) &saddr, &optlen) < 0) {
 		ofono_error("RFCOMM getpeername(): %s (%d)", strerror(errno),
 									errno);
+		g_slist_free_full(endpoints, (GDestroyNotify)bt_endpoint_free);
 		goto error;
 	}
 
@@ -136,6 +142,7 @@ static DBusMessage *profile_new_connection(DBusConnection *conn,
 	/* Pick the first voicecall capable modem */
 	modem = modems->data;
 	if (modem == NULL) {
+		g_slist_free_full(endpoints, (GDestroyNotify)bt_endpoint_free);
 		close(fd);
 		return g_dbus_create_error(msg, BLUEZ_ERROR_INTERFACE
 						".Rejected",
@@ -146,6 +153,7 @@ static DBusMessage *profile_new_connection(DBusConnection *conn,
 
 	em = ofono_emulator_create(modem, OFONO_EMULATOR_TYPE_HFP);
 	if (em == NULL) {
+		g_slist_free_full(endpoints, (GDestroyNotify)bt_endpoint_free);
 		close(fd);
 		return g_dbus_create_error(msg, BLUEZ_ERROR_INTERFACE
 						".Rejected",
@@ -158,6 +166,7 @@ static DBusMessage *profile_new_connection(DBusConnection *conn,
 	hfp_ag->em = em;
 	hfp_ag->local = local;
 	hfp_ag->peer = peer;
+	hfp_ag->endpoints = endpoints;
 	ofono_emulator_set_data(em, hfp_ag, free_hfp_ag);
 
 	hfp_ags = g_slist_append(hfp_ags, hfp_ag);
