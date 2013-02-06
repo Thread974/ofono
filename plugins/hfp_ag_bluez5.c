@@ -50,9 +50,11 @@
 
 struct hfp_ag {
 	struct ofono_emulator *em;
+	char *device_path;
 	bdaddr_t local;
 	bdaddr_t peer;
 	guint8 current_codec;
+	GIOChannel *scoio;
 	guint sco_watch;
 	GSList *endpoints;		/* Remote Media endpoints objects */
 	GSList *transports;
@@ -62,6 +64,173 @@ static guint modemwatch_id;
 static GList *modems;
 static GHashTable *sim_hash = NULL;
 static GSList *hfp_ags;
+
+static void sco_watch_destroy_1(gpointer user_data)
+{
+	struct hfp_ag *hfp_ag = user_data;
+
+	hfp_ag->sco_watch = 0;
+	if (hfp_ag->scoio) {
+		g_io_channel_unref(hfp_ag->scoio);
+		hfp_ag->scoio = NULL;
+	}
+}
+
+static gboolean sco_connect_cb(GIOChannel *io, GIOCondition cond,
+							gpointer user_data)
+
+{
+	struct hfp_ag *hfp_ag = user_data;
+	char adapter_address[18];
+	char device_address[18];
+	struct bt_transport *transport;
+
+	if (cond & (G_IO_ERR | G_IO_HUP | G_IO_NVAL))
+		return FALSE;
+
+	bt_ba2str(&hfp_ag->local, adapter_address);
+	bt_ba2str(&hfp_ag->peer, device_address);
+	DBG("%s connected to %s", adapter_address, device_address);
+
+	transport = bt_transport_by_codec(hfp_ag->transports,
+							hfp_ag->current_codec);
+	if (transport == NULL) {
+		ofono_error("No transport for codec %d", hfp_ag->current_codec);
+		return FALSE;
+	}
+
+	bt_transport_set_channel(transport, io);
+
+	return FALSE;
+}
+
+static GIOChannel *sco_connect(bdaddr_t *src, bdaddr_t *dst, int *err)
+{
+	struct sockaddr_sco addr;
+	GIOChannel *io;
+	int sk, ret;
+
+	sk = socket(PF_BLUETOOTH, SOCK_SEQPACKET, BTPROTO_SCO);
+	if (sk < 0) {
+		*err = errno;
+		return NULL;
+	}
+
+	/* Bind to local address */
+	memset(&addr, 0, sizeof(addr));
+	addr.sco_family = AF_BLUETOOTH;
+	bt_bacpy(&addr.sco_bdaddr, src);
+
+	if (bind(sk, (struct sockaddr *) &addr, sizeof(addr)) < 0) {
+		close(sk);
+		*err = errno;
+		return NULL;
+	}
+
+	/* Connect to remote device */
+	memset(&addr, 0, sizeof(addr));
+	addr.sco_family = AF_BLUETOOTH;
+	bt_bacpy(&addr.sco_bdaddr, dst);
+
+	io = g_io_channel_unix_new(sk);
+	g_io_channel_set_close_on_unref(io, TRUE);
+	g_io_channel_set_flags(io, G_IO_FLAG_NONBLOCK, NULL);
+
+	ret = connect(sk, (struct sockaddr *) &addr, sizeof(addr));
+	if (ret < 0 && !(errno == EAGAIN || errno == EINPROGRESS)) {
+		g_io_channel_unref(io);
+		*err = errno;
+		return NULL;
+	}
+
+	return io;
+}
+
+static void hfp15_initiate_sco(struct bt_transport *transport,
+							gpointer user_data)
+{
+	struct hfp_ag *hfp_ag = user_data;
+	char adapter_address[18];
+	char device_address[18];
+	GIOCondition cond;
+	int err = 0;
+
+	bt_ba2str(&hfp_ag->local, adapter_address);
+	bt_ba2str(&hfp_ag->peer, device_address);
+	DBG("HFP15 connecting SCO: %s > %s", adapter_address, device_address);
+
+	hfp_ag->scoio = sco_connect(&hfp_ag->local, &hfp_ag->peer, &err);
+	if (hfp_ag->scoio == NULL) {
+		ofono_error("SCO connect: %s(%d)", strerror(err), err);
+		return;
+	}
+
+	cond = G_IO_OUT | G_IO_ERR | G_IO_HUP | G_IO_NVAL;
+	hfp_ag->sco_watch = g_io_add_watch_full(hfp_ag->scoio, G_PRIORITY_DEFAULT,
+						cond, sco_connect_cb, hfp_ag,
+						sco_watch_destroy_1);
+}
+
+static void transport_registered_cb(DBusPendingCall *call, gpointer user_data)
+{
+//	struct hfp_ag *hfp_ag = user_data;
+	DBusMessage *reply;
+	struct DBusError derr;
+	dbus_bool_t ret;
+
+	DBG("");
+
+	reply = dbus_pending_call_steal_reply(call);
+
+	dbus_error_init(&derr);
+
+	ret = dbus_set_error_from_message(&derr, reply);
+
+	dbus_message_unref(reply);
+
+	if (ret == FALSE)
+		return;
+
+	ofono_error("%s: %s", derr.name, derr.message);
+	dbus_error_free(&derr);
+
+/*	if (hfp->slcio) {
+		g_io_channel_unref(hfp->slcio);
+		hfp->slcio = NULL;
+	}
+*/
+}
+
+static void transport_register(gpointer data, gpointer user_data)
+{
+	struct bt_endpoint *endpoint = data;
+	struct bt_transport *transport;
+	struct hfp_ag *hfp_ag = user_data;
+//	struct hfp_slc_info *info = &hfp_ag->info;
+	bt_initiate_audio cb;
+
+/*	if (info->ag_features & HFP_AG_FEATURE_CODEC_NEGOTIATION &&
+                       info->hf_features & HFP_HF_FEATURE_CODEC_NEGOTIATION)
+		cb = hfp16_initiate_sco;
+	else
+*/		cb = hfp15_initiate_sco;
+
+	transport = bt_transport_new(hfp_ag->device_path, endpoint, cb, hfp_ag);
+	if (bt_transport_register(transport, transport_registered_cb,
+								hfp_ag) < 0) {
+		bt_transport_unref(transport);
+		return;
+	}
+
+	hfp_ag->transports = g_slist_append(hfp_ag->transports, transport);
+}
+
+static void transport_unregister(gpointer data, gpointer user_data)
+{
+	struct bt_transport *transport = data;
+
+	bt_transport_unregister(transport);
+}
 
 static void free_hfp_ag(void *data)
 {
@@ -75,10 +244,13 @@ static void free_hfp_ag(void *data)
 	if (hfp_ag->sco_watch)
 		g_source_remove(hfp_ag->sco_watch);
 
+	g_slist_foreach(hfp_ag->transports, transport_unregister, hfp_ag);
+
 	g_slist_free_full(hfp_ag->endpoints,
 					(GDestroyNotify) bt_endpoint_unref);
 
 	hfp_ags = g_slist_remove(hfp_ags, hfp_ag);
+	g_free(hfp_ag->device_path);
 	g_free(hfp_ag);
 }
 
@@ -176,9 +348,13 @@ static DBusMessage *profile_new_connection(DBusConnection *conn,
 	hfp_ag->local = local;
 	hfp_ag->peer = peer;
 	hfp_ag->endpoints = endpoints;
+	hfp_ag->device_path = g_strdup(device);
+	hfp_ag->current_codec = HFP_CODEC_CVSD;
 	ofono_emulator_set_data(em, hfp_ag, free_hfp_ag);
 
 	hfp_ags = g_slist_append(hfp_ags, hfp_ag);
+
+	g_slist_foreach(hfp_ag->endpoints, transport_register, hfp_ag);
 
 	return dbus_message_new_method_return(msg);
 
