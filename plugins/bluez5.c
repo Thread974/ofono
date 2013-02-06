@@ -26,6 +26,8 @@
 #include <errno.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <unistd.h>
+#include <fcntl.h>
 #include <sys/socket.h>
 #include <string.h>
 
@@ -41,6 +43,9 @@
 
 #define BLUEZ_PROFILE_MGMT_INTERFACE   BLUEZ_SERVICE ".ProfileManager1"
 
+static guint sco_watch;
+static GSList *sco_cbs;
+
 void bt_bacpy(bdaddr_t *dst, const bdaddr_t *src)
 {
 	memcpy(dst, src, sizeof(bdaddr_t));
@@ -55,6 +60,118 @@ int bt_ba2str(const bdaddr_t *ba, char *str)
 int bt_bacmp(const bdaddr_t *ba1, const bdaddr_t *ba2)
 {
 	return memcmp(ba1, ba2, sizeof(bdaddr_t));
+}
+
+static gboolean sco_accept(GIOChannel *io, GIOCondition cond,
+							gpointer user_data)
+{
+	struct sockaddr_sco saddr;
+	socklen_t alen;
+	int sk, nsk;
+	GSList *l;
+
+	if (cond & (G_IO_ERR | G_IO_HUP | G_IO_NVAL))
+		return FALSE;
+
+	sk = g_io_channel_unix_get_fd(io);
+
+	memset(&saddr, 0, sizeof(saddr));
+	alen = sizeof(saddr);
+
+	nsk = accept(sk, (struct sockaddr *) &saddr, &alen);
+	if (nsk < 0)
+		return TRUE;
+
+	for (l = sco_cbs; l; l = l->next) {
+		bt_sco_accept_cb cb = l->data;
+
+		if (cb(nsk, &saddr))
+			return TRUE;
+	}
+
+	ofono_warn("No SCO callback for incoming connection");
+	close(nsk);
+
+	return TRUE;
+}
+
+static int sco_init(void)
+{
+	GIOChannel *sco_io;
+	struct sockaddr_sco saddr;
+	int sk, defer_setup = 1;
+
+	sk = socket(PF_BLUETOOTH, SOCK_SEQPACKET | O_NONBLOCK | SOCK_CLOEXEC,
+								BTPROTO_SCO);
+	if (sk < 0)
+		return -errno;
+
+	/* Bind to local address */
+	memset(&saddr, 0, sizeof(saddr));
+	saddr.sco_family = AF_BLUETOOTH;
+	bt_bacpy(&saddr.sco_bdaddr, BDADDR_ANY);
+
+	if (bind(sk, (struct sockaddr *) &saddr, sizeof(saddr)) < 0) {
+		close(sk);
+		return -errno;
+	}
+
+	if (setsockopt(sk, SOL_BLUETOOTH, BT_DEFER_SETUP,
+				&defer_setup, sizeof(defer_setup)) < 0)
+		ofono_warn("Can't enable deferred setup: %s (%d)",
+						strerror(errno), errno);
+
+	if (listen(sk, 5) < 0) {
+		close(sk);
+		return -errno;
+	}
+
+	sco_io = g_io_channel_unix_new(sk);
+	g_io_channel_set_close_on_unref(sco_io, TRUE);
+
+	sco_watch = g_io_add_watch(sco_io,
+				G_IO_IN | G_IO_ERR | G_IO_HUP | G_IO_NVAL,
+				sco_accept, NULL);
+
+	g_io_channel_unref(sco_io);
+
+	return 0;
+}
+
+int bt_register_sco_server(bt_sco_accept_cb cb)
+{
+	int err;
+
+	if (!cb) {
+		ofono_error("SCO: invalid callback");
+		return -1;
+	}
+
+	if (!sco_cbs) {
+		err = sco_init();
+		if (err < 0) {
+			ofono_error("SCO: %s(%d)", strerror(-err), -err);
+			return err;
+		}
+	}
+
+	sco_cbs = g_slist_append(sco_cbs, cb);
+
+	return 0;
+}
+
+void bt_unregister_sco_server(bt_sco_accept_cb cb)
+{
+	if (!cb) {
+		ofono_error("SCO: invalid callback");
+		return;
+	}
+
+	sco_cbs = g_slist_remove(sco_cbs, cb);
+	if (sco_cbs)
+		return;
+
+	g_source_remove(sco_watch);
 }
 
 static void profile_register_cb(DBusPendingCall *call, gpointer user_data)

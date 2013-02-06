@@ -69,6 +69,11 @@ int bt_ba2str(const bdaddr_t *ba, char *str);
 
 int bt_bacmp(const bdaddr_t *ba1, const bdaddr_t *ba2);
 
+typedef gboolean (*bt_sco_accept_cb)(int fd, struct sockaddr_sco *saddr);
+
+int bt_register_sco_server(bt_sco_accept_cb cb);
+void bt_unregister_sco_server(bt_sco_accept_cb cb);
+
 int bluetooth_register_profile(DBusConnection *conn, const char *uuid,
 					const char *name, const char *object);
 
