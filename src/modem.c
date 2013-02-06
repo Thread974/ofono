@@ -813,14 +813,14 @@ void __ofono_modem_append_properties(struct ofono_modem *modem,
 	for (i = 0, l = modem->interface_list; l; l = l->next, i++)
 		interfaces[i] = l->data;
 	ofono_dbus_dict_append_array(dict, "Interfaces", DBUS_TYPE_STRING,
-					&interfaces);
+					&interfaces, i);
 	g_free(interfaces);
 
 	features = g_new0(char *, g_slist_length(modem->feature_list) + 1);
 	for (i = 0, l = modem->feature_list; l; l = l->next, i++)
 		features[i] = l->data;
 	ofono_dbus_dict_append_array(dict, "Features", DBUS_TYPE_STRING,
-					&features);
+					&features, i);
 	g_free(features);
 
 	if (modem->name)
@@ -1234,7 +1234,7 @@ static gboolean trigger_interface_update(void *data)
 	ofono_dbus_signal_array_property_changed(conn, modem->path,
 						OFONO_MODEM_INTERFACE,
 						"Interfaces", DBUS_TYPE_STRING,
-						&interfaces);
+						&interfaces, i);
 	g_free(interfaces);
 
 	features = g_new0(char *, g_slist_length(modem->feature_list) + 1);
@@ -1243,7 +1243,7 @@ static gboolean trigger_interface_update(void *data)
 	ofono_dbus_signal_array_property_changed(conn, modem->path,
 						OFONO_MODEM_INTERFACE,
 						"Features", DBUS_TYPE_STRING,
-						&features);
+						&features, i);
 	g_free(features);
 
 	modem->interface_update = 0;

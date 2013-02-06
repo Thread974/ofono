@@ -104,8 +104,9 @@ static void settings_append(struct dundee_device *device,
 
 	if (device->settings.nameservers)
 		ofono_dbus_dict_append_array(&array, "DomainNameServers",
-						DBUS_TYPE_STRING,
-						&device->settings.nameservers);
+				DBUS_TYPE_STRING,
+				&device->settings.nameservers,
+				g_strv_length(device->settings.nameservers));
 
 out:
 	dbus_message_iter_close_container(&variant, &array);
