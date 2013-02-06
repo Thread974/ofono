@@ -46,12 +46,16 @@
 
 #define HFP_VERSION_1_6		0x0106
 
+#define HFP_CODEC_CVSD		1
+
 struct hfp_ag {
 	struct ofono_emulator *em;
 	bdaddr_t local;
 	bdaddr_t peer;
+	guint8 current_codec;
 	guint sco_watch;
 	GSList *endpoints;		/* Remote Media endpoints objects */
+	GSList *transports;
 };
 
 static guint modemwatch_id;
@@ -229,21 +233,29 @@ static const GDBusMethodTable profile_methods[] = {
 	{ }
 };
 
-static gboolean sco_cb(GIOChannel *io, GIOCondition cond,
-							gpointer user_data)
-
+static uint8_t codec2mode(uint8_t codec)
 {
-	struct hfp_ag *hfp_ag = user_data;
-	char adapter_address[18];
-	char device_address[18];
+	switch (codec) {
+	case HFP_CODEC_CVSD:
+		return SCO_MODE_CVSD;
+	default:
+		return SCO_MODE_TRANSPARENT;
+	}
+}
 
-	if (cond & (G_IO_ERR | G_IO_HUP | G_IO_NVAL)) {
-		hfp_ag->sco_watch = 0;
+static gboolean sco_set_codec(int sk, uint8_t codec)
+{
+	struct sco_options options;
+	int err;
 
-		bt_ba2str(&hfp_ag->local, adapter_address);
-		bt_ba2str(&hfp_ag->peer, device_address);
-		DBG("SCO: %s - %s (closed)", adapter_address, device_address);
+	memset(&options, 0, sizeof(options));
 
+	options.mode = codec2mode(codec);
+
+	if (setsockopt(sk, SOL_SCO, SCO_OPTIONS, &options, sizeof(options)) < 0) {
+		err = errno;
+		ofono_error("Can't set SCO options: %s (%d)",
+							strerror(err), err);
 		return FALSE;
 	}
 
@@ -259,6 +271,7 @@ static gboolean hfp_ag_sco_accept(int fd, struct sockaddr_sco *raddr)
 	char device_address[18];
 	struct hfp_ag *hfp_ag = NULL;
 	GIOChannel *sco_io;
+	struct bt_transport *transport;
 	int err;
 
 	memset(&laddr, 0, sizeof(laddr));
@@ -287,6 +300,13 @@ static gboolean hfp_ag_sco_accept(int fd, struct sockaddr_sco *raddr)
 		return FALSE;
 	}
 
+	if (sco_set_codec(fd, hfp_ag->current_codec) == FALSE) {
+		ofono_error("Can't set codec SCO option");
+
+		/* Fallback to the default codec */
+		hfp_ag->current_codec = HFP_CODEC_CVSD;
+	}
+
 	bt_ba2str(&laddr.sco_bdaddr, adapter_address);
 	bt_ba2str(&raddr->sco_bdaddr, device_address);
 	DBG("SCO: %s < %s (incoming)", adapter_address, device_address);
@@ -296,9 +316,14 @@ static gboolean hfp_ag_sco_accept(int fd, struct sockaddr_sco *raddr)
 	g_io_channel_set_close_on_unref(sco_io, TRUE);
 	g_io_channel_set_flags(sco_io, G_IO_FLAG_NONBLOCK, NULL);
 
-	hfp_ag->sco_watch = g_io_add_watch(sco_io,
-						G_IO_ERR | G_IO_HUP | G_IO_NVAL,
-						sco_cb, hfp_ag);
+	transport = bt_transport_by_codec(hfp_ag->transports,
+						hfp_ag->current_codec);
+	if (transport == NULL) {
+		ofono_error("No transport for codec %d", hfp_ag->current_codec);
+		return TRUE;
+	}
+
+	bt_transport_set_channel(transport, sco_io);
 
 	g_io_channel_unref(sco_io);
 

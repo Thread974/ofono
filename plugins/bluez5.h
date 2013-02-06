@@ -65,6 +65,36 @@ struct sockaddr_sco {
 	bdaddr_t	sco_bdaddr;
 };
 
+/* SCO socket options */
+#define SCO_OPTIONS	0x01
+
+#define SCO_MODE_CVSD		0x00
+#define SCO_MODE_TRANSPARENT	0x01
+#define SCO_MODE_ENHANCED	0x02
+struct sco_options {
+	uint16_t mtu;
+	uint8_t mode;
+};
+
+struct sco_coding {
+	uint8_t format;
+	uint16_t vid;
+	uint16_t cid;
+};
+
+struct sco_options_enhanced {
+	uint16_t mtu;
+	uint8_t mode;
+	struct sco_coding host;
+	struct sco_coding air;
+};
+
+#define SCO_CONNINFO	0x02
+struct sco_conninfo {
+	uint16_t hci_handle;
+	uint8_t  dev_class[3];
+};
+
 void bt_bacpy(bdaddr_t *dst, const bdaddr_t *src);
 
 int bt_ba2str(const bdaddr_t *ba, char *str);
