@@ -78,6 +78,8 @@ static DBusMessage *profile_new_connection(DBusConnection *conn,
 	DBusMessageIter entry;
 	const char *device;
 	int fd;
+	guint16 version = 0;
+	guint16 features = 0;
 	struct sockaddr_rc saddr;
 	bdaddr_t local;
 	bdaddr_t peer;
@@ -106,7 +108,10 @@ static DBusMessage *profile_new_connection(DBusConnection *conn,
 	if (fd < 0)
 		goto invalid;
 
-	DBG("%s", device);
+	if (bt_parse_fd_properties(&entry, &version, &features, NULL) < 0)
+		goto error;
+
+	DBG("%s version: 0x%04x features: 0x%04x", device, version, features);
 
 	memset(&saddr, 0, sizeof(saddr));
 	optlen = sizeof(saddr);
