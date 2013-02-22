@@ -194,6 +194,8 @@ static const GDBusMethodTable am_methods[] = {
 static const GDBusSignalTable am_signals[] = {
 	{ GDBUS_SIGNAL("CardAdded",
 		GDBUS_ARGS({ "path", "o" }, { "properties", "a{sv}" })) },
+	{ GDBUS_SIGNAL("CardRemoved",
+		GDBUS_ARGS({ "path", "o" })) },
 	{ }
 };
 
@@ -243,6 +245,25 @@ static void am_emit_card_added(const char *path, struct ofono_modem *modem)
 	g_dbus_send_message(ofono_dbus_get_connection(), signal);
 }
 
+static void am_emit_card_removed(const char *path, struct ofono_modem *modem)
+{
+	DBusMessage *signal;
+	DBusMessageIter iter;
+
+	signal = dbus_message_new_signal("/", HFP_AUDIO_MANAGER_INTERFACE,
+								"CardRemoved");
+	if (signal == NULL) {
+		ofono_error("Unable to allocate new CardRemoved signal");
+		return;
+	}
+
+	dbus_message_iter_init_append(signal, &iter);
+
+	dbus_message_iter_append_basic(&iter, DBUS_TYPE_OBJECT_PATH, &path);
+
+	g_dbus_send_message(ofono_dbus_get_connection(), signal);
+}
+
 static void am_card_add(const char *path, struct ofono_modem *modem)
 {
 	g_dbus_register_interface(ofono_dbus_get_connection(), path,
@@ -254,6 +275,16 @@ static void am_card_add(const char *path, struct ofono_modem *modem)
 	DBG("Audio Card added: %s", path);
 }
 
+static void am_card_remove(const char *path, struct ofono_modem *modem)
+{
+	am_emit_card_removed(path, modem);
+
+	g_dbus_unregister_interface(ofono_dbus_get_connection(), path,
+						HFP_AUDIO_CARD_INTERFACE);
+
+	DBG("Audio Card removed: %s", path);
+}
+
 static void handsfree_modem_watch(struct ofono_atom *atom,
 			enum ofono_atom_watch_condition cond, void *user_data)
 {
@@ -262,11 +293,8 @@ static void handsfree_modem_watch(struct ofono_atom *atom,
 
 	if (cond == OFONO_ATOM_WATCH_CONDITION_REGISTERED)
 		am_card_add(path, modem);
-	else {
-		g_dbus_unregister_interface(ofono_dbus_get_connection(), path,
-						HFP_AUDIO_CARD_INTERFACE);
-		DBG("Audio Card removed: %s", path);
-	}
+	else
+		am_card_remove(path, modem);
 }
 
 static void modem_watch(struct ofono_modem *modem, gboolean added, void *user)
