@@ -51,6 +51,7 @@ struct agent {
 };
 
 static struct agent *agent = NULL;
+static unsigned int modemwatch_id;
 static int ref_count = 0;
 
 static void agent_free(struct agent *agent)
@@ -171,6 +172,20 @@ static const GDBusMethodTable am_methods[] = {
 	{ }
 };
 
+static void handsfree_modem_watch(struct ofono_atom *atom,
+			enum ofono_atom_watch_condition cond, void *user_data)
+{
+}
+
+static void modem_watch(struct ofono_modem *modem, gboolean added, void *user)
+{
+	if (added == FALSE)
+		return;
+
+	__ofono_modem_add_atom_watch(modem, OFONO_ATOM_TYPE_HANDSFREE,
+					handsfree_modem_watch, modem, NULL);
+}
+
 void ofono_handsfree_audio_ref(void)
 {
 	ref_count += 1;
@@ -180,8 +195,12 @@ void ofono_handsfree_audio_ref(void)
 
 	if (!g_dbus_register_interface(ofono_dbus_get_connection(),
 					"/", HFP_AUDIO_MANAGER_INTERFACE,
-					am_methods, NULL, NULL, NULL, NULL))
+					am_methods, NULL, NULL, NULL, NULL)) {
 		ofono_error("Unable to register Handsfree Audio Manager");
+		return;
+	}
+
+	modemwatch_id = __ofono_modemwatch_add(modem_watch, NULL, NULL);
 }
 
 void ofono_handsfree_audio_unref(void)
@@ -195,6 +214,8 @@ void ofono_handsfree_audio_unref(void)
 
 	if (ref_count > 0)
 		return;
+
+	__ofono_modemwatch_remove(modemwatch_id);
 
 	g_dbus_unregister_interface(ofono_dbus_get_connection(), "/",
 						HFP_AUDIO_MANAGER_INTERFACE);
