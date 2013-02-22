@@ -84,6 +84,24 @@ static void agent_disconnect(DBusConnection *conn, void *user_data)
 	agent = NULL;
 }
 
+static void card_append_properties(DBusMessageIter *iter,
+						struct ofono_modem *modem)
+{
+	DBusMessageIter dict;
+	const char *address;
+
+	dbus_message_iter_open_container(iter, DBUS_TYPE_ARRAY,
+					OFONO_PROPERTIES_ARRAY_SIGNATURE,
+					&dict);
+
+	address = ofono_modem_get_string(modem, "Remote");
+
+	ofono_dbus_dict_append(&dict, "RemoteAddress",
+					DBUS_TYPE_STRING, &address);
+
+	dbus_message_iter_close_container(iter, &dict);
+}
+
 static DBusMessage *am_get_cards(DBusConnection *conn,
 					DBusMessage *msg, void *user_data)
 {
@@ -183,10 +201,8 @@ static DBusMessage *card_get_properties(DBusConnection *conn,
 					DBusMessage *msg, void *user_data)
 {
 	struct ofono_modem *modem = user_data;
-	const char *address;
 	DBusMessage *reply;
 	DBusMessageIter iter;
-	DBusMessageIter dict;
 
 	reply = dbus_message_new_method_return(msg);
 	if (reply == NULL)
@@ -194,16 +210,7 @@ static DBusMessage *card_get_properties(DBusConnection *conn,
 
 	dbus_message_iter_init_append(reply, &iter);
 
-	dbus_message_iter_open_container(&iter, DBUS_TYPE_ARRAY,
-					OFONO_PROPERTIES_ARRAY_SIGNATURE,
-					&dict);
-
-	address = ofono_modem_get_string(modem, "Remote");
-
-	ofono_dbus_dict_append(&dict, "RemoteAddress",
-					DBUS_TYPE_STRING, &address);
-
-	dbus_message_iter_close_container(&iter, &dict);
+	card_append_properties(&iter, modem);
 
 	return reply;
 }
@@ -219,8 +226,6 @@ static void am_emit_card_added(const char *path, struct ofono_modem *modem)
 {
 	DBusMessage *signal;
 	DBusMessageIter iter;
-	DBusMessageIter dict;
-	const char *address;
 
 	signal = dbus_message_new_signal("/", HFP_AUDIO_MANAGER_INTERFACE,
 								"CardAdded");
@@ -233,16 +238,7 @@ static void am_emit_card_added(const char *path, struct ofono_modem *modem)
 
 	dbus_message_iter_append_basic(&iter, DBUS_TYPE_OBJECT_PATH, &path);
 
-	dbus_message_iter_open_container(&iter, DBUS_TYPE_ARRAY,
-					OFONO_PROPERTIES_ARRAY_SIGNATURE,
-					&dict);
-
-	address = ofono_modem_get_string(modem, "Remote");
-
-	ofono_dbus_dict_append(&dict, "RemoteAddress",
-					DBUS_TYPE_STRING, &address);
-
-	dbus_message_iter_close_container(&iter, &dict);
+	card_append_properties(&iter, modem);
 
 	g_dbus_send_message(ofono_dbus_get_connection(), signal);
 }
