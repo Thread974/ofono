@@ -103,10 +103,55 @@ static void card_append_properties(DBusMessageIter *iter,
 	dbus_message_iter_close_container(iter, &dict);
 }
 
+static void append_card(gpointer data, gpointer user_data)
+{
+	struct ofono_atom *atom = data;
+	DBusMessageIter *array = user_data;
+	const char *path = __ofono_atom_get_path(atom);
+	DBusMessageIter entry;
+
+	dbus_message_iter_open_container(array, DBUS_TYPE_STRUCT,
+							NULL, &entry);
+
+	dbus_message_iter_append_basic(&entry, DBUS_TYPE_OBJECT_PATH, &path);
+
+	card_append_properties(&entry, __ofono_atom_get_modem(atom));
+
+	dbus_message_iter_close_container(array, &entry);
+}
+
 static DBusMessage *am_get_cards(DBusConnection *conn,
 					DBusMessage *msg, void *user_data)
 {
-	return __ofono_error_not_implemented(msg);
+	DBusMessage *reply;
+	DBusMessageIter iter, array;
+
+	reply = dbus_message_new_method_return(msg);
+	if (reply == NULL)
+		return NULL;
+
+	dbus_message_iter_init_append(reply, &iter);
+
+	/*
+	 * a{oa{sv}}: Array of cards containing the object path of the
+	 * Audio Card and a dictionary of it's properties
+	 */
+	dbus_message_iter_open_container(&iter, DBUS_TYPE_ARRAY,
+					DBUS_STRUCT_BEGIN_CHAR_AS_STRING
+					DBUS_TYPE_OBJECT_PATH_AS_STRING
+					DBUS_TYPE_ARRAY_AS_STRING
+					DBUS_DICT_ENTRY_BEGIN_CHAR_AS_STRING
+					DBUS_TYPE_STRING_AS_STRING
+					DBUS_TYPE_VARIANT_AS_STRING
+					DBUS_DICT_ENTRY_END_CHAR_AS_STRING
+					DBUS_STRUCT_END_CHAR_AS_STRING,
+					&array);
+
+	g_slist_foreach(cards, append_card, &array);
+
+	dbus_message_iter_close_container(&iter, &array);
+
+	return reply;
 }
 
 static DBusMessage *am_agent_register(DBusConnection *conn,
