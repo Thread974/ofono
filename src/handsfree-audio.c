@@ -176,7 +176,30 @@ static const GDBusMethodTable am_methods[] = {
 static DBusMessage *card_get_properties(DBusConnection *conn,
 					DBusMessage *msg, void *user_data)
 {
-	return __ofono_error_not_implemented(msg);
+	struct ofono_modem *modem = user_data;
+	const char *address;
+	DBusMessage *reply;
+	DBusMessageIter iter;
+	DBusMessageIter dict;
+
+	reply = dbus_message_new_method_return(msg);
+	if (reply == NULL)
+		return NULL;
+
+	dbus_message_iter_init_append(reply, &iter);
+
+	dbus_message_iter_open_container(&iter, DBUS_TYPE_ARRAY,
+					OFONO_PROPERTIES_ARRAY_SIGNATURE,
+					&dict);
+
+	address = ofono_modem_get_string(modem, "Remote");
+
+	ofono_dbus_dict_append(&dict, "RemoteAddress",
+					DBUS_TYPE_STRING, &address);
+
+	dbus_message_iter_close_container(&iter, &dict);
+
+	return reply;
 }
 
 static const GDBusMethodTable card_methods[] = {
@@ -189,12 +212,13 @@ static const GDBusMethodTable card_methods[] = {
 static void handsfree_modem_watch(struct ofono_atom *atom,
 			enum ofono_atom_watch_condition cond, void *user_data)
 {
+	struct ofono_modem *modem = user_data;
 	const char *path = __ofono_atom_get_path(atom);
 
 	if (cond == OFONO_ATOM_WATCH_CONDITION_REGISTERED) {
 		g_dbus_register_interface(ofono_dbus_get_connection(), path,
 					HFP_AUDIO_CARD_INTERFACE, card_methods,
-					NULL, NULL, NULL, NULL);
+					NULL, NULL, modem, NULL);
 
 		DBG("Audio Card added: %s", path);
 	} else {
