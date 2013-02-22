@@ -51,6 +51,7 @@ struct agent {
 	guint watch;
 };
 
+static GSList *cards = NULL;
 static struct agent *agent = NULL;
 static unsigned int modemwatch_id;
 static int ref_count = 0;
@@ -266,9 +267,10 @@ static void am_emit_card_removed(const char *path, struct ofono_modem *modem)
 
 static void am_card_add(const char *path, struct ofono_modem *modem)
 {
-	g_dbus_register_interface(ofono_dbus_get_connection(), path,
+	if (!g_dbus_register_interface(ofono_dbus_get_connection(), path,
 					HFP_AUDIO_CARD_INTERFACE, card_methods,
-					NULL, NULL, modem, NULL);
+					NULL, NULL, modem, NULL))
+		return;
 
 	am_emit_card_added(path, modem);
 
@@ -291,10 +293,13 @@ static void handsfree_modem_watch(struct ofono_atom *atom,
 	struct ofono_modem *modem = user_data;
 	const char *path = __ofono_atom_get_path(atom);
 
-	if (cond == OFONO_ATOM_WATCH_CONDITION_REGISTERED)
+	if (cond == OFONO_ATOM_WATCH_CONDITION_REGISTERED) {
 		am_card_add(path, modem);
-	else
+		cards = g_slist_append(cards, atom);
+	} else {
 		am_card_remove(path, modem);
+		cards = g_slist_remove(cards, atom);
+	}
 }
 
 static void modem_watch(struct ofono_modem *modem, gboolean added, void *user)
