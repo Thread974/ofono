@@ -725,7 +725,7 @@ tools_huawei_audio_SOURCES = $(gdbus_sources) tools/huawei-audio.c
 tools_huawei_audio_LDADD = @GLIB_LIBS@ @DBUS_LIBS@
 
 tools_handsfree_audio_SOURCES = $(gdbus_sources) tools/handsfree-audio.c
-tools_handsfree_audio_LDADD = @GLIB_LIBS@ @DBUS_LIBS@
+tools_handsfree_audio_LDADD = @GLIB_LIBS@ @DBUS_LIBS@ @ALSA_LIBS@ -lpthread
 
 tools_auto_enable_SOURCES = $(gdbus_sources) tools/auto-enable.c
 tools_auto_enable_LDADD = @GLIB_LIBS@ @DBUS_LIBS@
