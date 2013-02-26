@@ -30,9 +30,15 @@
 #include <stdlib.h>
 #include <string.h>
 #include <signal.h>
+#include <sys/time.h>
 
 #include <gdbus.h>
 #include <glib.h>
+
+#include <alsa/asoundlib.h>
+#include <pthread.h>
+#include <bluetooth/bluetooth.h>
+#include <bluetooth/sco.h>
 
 #define OFONO_SERVICE			"org.ofono"
 #define HFP_AUDIO_MANAGER_PATH		"/"
@@ -50,57 +56,226 @@
 /* DBus related */
 static GMainLoop *main_loop = NULL;
 static DBusConnection *conn;
-static GSList *hcons = NULL;
+static GSList *threads = NULL;
 
 static gboolean option_nocvsd = FALSE;
 static gboolean option_nomsbc = FALSE;
 
-struct hfp_audio_conn {
-	unsigned char codec;
-	int watch;
+enum {
+	THREAD_STATE_DEFERED,
+	THREAD_STATE_TRANSMIT
 };
 
-static void hfp_audio_conn_free(struct hfp_audio_conn *hcon)
-{
-	DBG("Freeing audio connection %p", hcon);
+struct hfp_audio_thread {
+	int state;
+	unsigned char codec;
+	int fd;
+	int running;
+	pthread_t thread;
+};
 
-	hcons = g_slist_remove(hcons, hcon);
-	g_source_remove(hcon->watch);
-	g_free(hcon);
+static snd_pcm_t *hfp_audio_pcm_init(snd_pcm_stream_t stream)
+{
+	snd_pcm_t *pcm;
+	DBG("Initializing pcm for %s", (stream == SND_PCM_STREAM_CAPTURE) ?
+			"capture" : "playback");
+
+	if (snd_pcm_open(&pcm, "default", stream, SND_PCM_NONBLOCK) < 0) {
+		DBG("Failed to open pcm");
+		return NULL;
+	}
+
+	/* 8000 khz, 16 bits, 128000 bytes/s, 48 bytes/frame, 6000 fps */
+	if (snd_pcm_set_params(pcm, SND_PCM_FORMAT_S16_LE,
+					SND_PCM_ACCESS_RW_INTERLEAVED,
+					1, 8000, 1, 20000) < 0) {
+		DBG("Failed to set pcm params");
+		snd_pcm_close(pcm);
+		pcm = NULL;
+	}
+
+	return pcm;
 }
 
-static gboolean hfp_audio_cb(GIOChannel *io, GIOCondition cond, gpointer data)
+static void hfp_audio_thread_free(struct hfp_audio_thread *hcon)
 {
-	struct hfp_audio_conn *hcon = data;
-	gsize read;
-	gsize written;
-	char buf[60];
+	DBG("Freeing audio connection %p", hcon);
+	if (!hcon)
+		return;
 
-	if (cond & (G_IO_HUP | G_IO_NVAL | G_IO_ERR))
-		goto fail;
+	hcon->running = 0;
+	if (hcon->thread)
+		pthread_join(hcon->thread, NULL);
 
-	if (g_io_channel_read_chars(io, buf, sizeof(buf), &read, NULL) !=
-			G_IO_STATUS_NORMAL)
-		goto fail;
+	threads = g_slist_remove(threads, hcon);
+	g_free(hcon);
+	DBG("freed %p", hcon);
+}
 
-	g_io_channel_write_chars(io, buf+written, read, &written, NULL);
+/* Returns the number of data on sco socket */
+static int hfp_audio_playback(int fd, snd_pcm_t *playback)
+{
+	char buf[800];
+	snd_pcm_sframes_t frames;
+	int total, captured, written, bytes;
 
-	return TRUE;
+	bytes = read(fd, buf, sizeof(buf));
+	if (bytes < 0) {
+		DBG("Failed to read: bytes %d, errno %d", bytes, errno);
+		switch (errno) {
+		case ENOTCONN:
+			return -ENOTCONN;
+		case EAGAIN:
+			return 0;
+		default:
+			return -EINVAL;
+		}
+	}
 
-fail:
-	DBG("Disconnected");
-	hfp_audio_conn_free(hcon);
-	return FALSE;
+	frames = snd_pcm_writei(playback, buf, bytes / 2);
+	switch (frames) {
+	case -EPIPE:
+		DBG("Playback underrun");
+		snd_pcm_prepare(playback);
+		return bytes;
+	case -EAGAIN:
+		DBG("??? %d", bytes / 2);
+		return bytes;
+	case -EBADFD:
+	case -ESTRPIPE:
+		return -EINVAL;
+	}
+
+	if (frames < bytes / 2)
+		DBG("played %d < requested %d", (int)frames, bytes / 2);
+
+	return bytes;
+}
+
+/* Returns the number of data on sco socket */
+static int hfp_audio_capture(int fd, snd_pcm_t *capture, GList **outq, int mtu)
+{
+	snd_pcm_sframes_t frames;
+	int totalbytes, captured, written, bytes, tosend;
+	gchar *buf;
+
+	buf = g_try_malloc(mtu);
+	if (!buf)
+		return -ENOMEM;
+
+	frames = snd_pcm_readi(capture, buf, mtu / 2);
+	switch (frames) {
+	case -EPIPE:
+		DBG("Capture overrun");
+		snd_pcm_prepare(capture);
+		return 0;
+	case -EAGAIN:
+		DBG("No data to capture");
+		return 0;
+	case -EBADFD:
+	case -ESTRPIPE:
+		return -EINVAL;
+	}
+
+	*outq = g_list_append(*outq, buf);
+
+	return frames * 2;
+}
+
+static void pop_outq(int fd, GList **outq, int qsize, int mtu)
+{
+	GList *el;
+
+	el = g_list_first(*outq);
+	if (!el)
+		return;
+
+	*outq = g_list_remove_link(*outq, el);
+	write(fd, el->data, mtu);
+
+	g_free(el->data);
+	g_list_free(el);
+}
+
+static void *thread_func(void *userdata)
+{
+	struct hfp_audio_thread *hcon = userdata;
+	snd_pcm_t *playback, *capture;
+	int in, totalread = 0;
+	int out, totalwrite = 0;
+	int total, captured, written, bytes;
+	GList *outq = NULL;
+	struct timeval t0, t1, t;
+	struct sco_options  opts;
+
+	/* Add SCO options
+	bytes = sizeof(opts);
+	if (getsockopt(hcon->fd, SOL_SCO, SCO_OPTIONS, &opts, &bytes) < 0) {
+		DBG("getsockopt failed");
+		return NULL;
+	}*/
+	opts.mtu = 48;
+
+	DBG("thread started mtu %d", opts.mtu);
+
+	playback = hfp_audio_pcm_init(SND_PCM_STREAM_PLAYBACK);
+	if (!playback)
+		return NULL;
+
+	capture = hfp_audio_pcm_init(SND_PCM_STREAM_CAPTURE);
+	if (!capture) {
+		snd_pcm_close(playback);
+		return NULL;
+	}
+
+	gettimeofday(&t0, NULL);
+	while (hcon->running) {
+		in = hfp_audio_playback(hcon->fd, playback);
+		if (hcon->state == THREAD_STATE_DEFERED)
+			DBG("in %d", in);
+		if ((in == 0 || in == -ENOTCONN) &&
+				hcon->state == THREAD_STATE_DEFERED)
+			goto schedule;
+		else if (in < 0)
+			break;
+		else if (in > 0)
+			hcon->state = THREAD_STATE_TRANSMIT;
+
+		out = hfp_audio_capture(hcon->fd, capture, &outq, opts.mtu);
+		if (out < 0)
+			break;
+
+		totalread += in;
+		totalwrite += out;
+
+		gettimeofday(&t1, NULL);
+		pop_outq(hcon->fd, &outq, 20, opts.mtu);
+
+		timersub(&t1, &t0, &t);
+		/* More than one second passed? */
+		if (t.tv_sec) {
+			DBG("total: read %d, write %d", totalread, totalwrite);
+			gettimeofday(&t0, NULL);
+		}
+schedule:
+		usleep(2000);
+	}
+
+	DBG("thread terminating");
+	snd_pcm_close(playback);
+	snd_pcm_close(capture);
+	return NULL;
 }
 
 static DBusMessage *agent_newconnection(DBusConnection *conn, DBusMessage *msg,
 					void *data)
 {
 	const char *card;
-	int fd;
+	int fd, err;
 	unsigned char codec;
-	GIOChannel *io;
-	struct hfp_audio_conn *hcon;
+	struct hfp_audio_thread *hcon;
+	DBusMessage *reply;
+	pthread_attr_t attr;
 
 	DBG("New connection");
 
@@ -114,28 +289,45 @@ static DBusMessage *agent_newconnection(DBusConnection *conn, DBusMessage *msg,
 
 	DBG("New connection: card=%s fd=%d codec=%d", card, fd, codec);
 
-	io = g_io_channel_unix_new(fd);
-
-	hcon = g_try_malloc0(sizeof(struct hfp_audio_conn));
+	hcon = g_try_malloc0(sizeof(struct hfp_audio_thread));
 	if (hcon == NULL)
-		return NULL;
+		goto fail;
 
+	hcon->state = THREAD_STATE_DEFERED;
+	hcon->fd = fd;
 	hcon->codec = codec;
-	hcon->watch = g_io_add_watch(io, G_IO_IN, hfp_audio_cb, hcon);
-	hcons = g_slist_prepend(hcons, hcon);
 
-	return dbus_message_new_method_return(msg);
+	reply = dbus_message_new_method_return(msg);
+	if (!reply)
+		goto fail;
+
+	hcon->running = 1;
+	if (pthread_create(&hcon->thread, NULL, thread_func, hcon) < 0)
+		goto fail;
+	/* FIXME thread is not joined until we quit */
+
+	threads = g_slist_prepend(threads, hcon);
+
+	return reply;
+
+fail:
+	hfp_audio_thread_free(hcon);
+	return g_dbus_create_error(msg,
+			HFP_AUDIO_AGENT_INTERFACE ".Failed", "Failed to start");
 }
 
 static DBusMessage *agent_release(DBusConnection *conn, DBusMessage *msg,
 					void *data)
 {
 	DBG("HFP audio agent released");
+	/* agent will be registered on next oFono startup */
 	return dbus_message_new_method_return(msg);
 }
 
 static const GDBusMethodTable agent_methods[] = {
-	{ GDBUS_METHOD("NewConnection", NULL, NULL, agent_newconnection) },
+	{ GDBUS_METHOD("NewConnection",
+		GDBUS_ARGS({ "path", "o" }, { "fd", "h" }, { "codec", "y" }),
+		NULL, agent_newconnection) },
 	{ GDBUS_METHOD("Release", NULL, NULL, agent_release) },
 	{ },
 };
@@ -167,7 +359,7 @@ static void hfp_audio_agent_register(DBusConnection *conn)
 	const unsigned char *pcodecs = codecs;
 	int ncodecs = 0;
 
-	DBG("Registering audio agent");
+	DBG("Registering audio agent in oFono");
 
 	msg = dbus_message_new_method_call(OFONO_SERVICE,
 						HFP_AUDIO_MANAGER_PATH,
@@ -196,11 +388,6 @@ static void hfp_audio_agent_register(DBusConnection *conn)
 
 	dbus_message_unref(msg);
 
-	if (call == NULL) {
-		DBG("Unable to register agent");
-		return;
-	}
-
 	dbus_pending_call_set_notify(call, hfp_audio_agent_register_reply,
 						NULL, NULL);
 
@@ -209,7 +396,7 @@ static void hfp_audio_agent_register(DBusConnection *conn)
 
 static void hfp_audio_agent_create(DBusConnection *conn)
 {
-	DBG("Creating audio agent");
+	DBG("Registering audio agent on DBUS");
 
 	if (!g_dbus_register_interface(conn, HFP_AUDIO_AGENT_PATH,
 					HFP_AUDIO_AGENT_INTERFACE,
@@ -222,7 +409,7 @@ static void hfp_audio_agent_create(DBusConnection *conn)
 
 static void hfp_audio_agent_destroy(DBusConnection *conn)
 {
-	DBG("Destroying audio agent");
+	DBG("Unregistering audio agent on DBUS");
 
 	g_dbus_unregister_interface(conn, HFP_AUDIO_AGENT_PATH,
 						HFP_AUDIO_AGENT_INTERFACE);
@@ -319,8 +506,8 @@ int main(int argc, char **argv)
 
 	g_dbus_remove_watch(conn, watch);
 
-	while (hcons != NULL)
-		hfp_audio_conn_free(hcons->data);
+	while (threads != NULL)
+		hfp_audio_thread_free(threads->data);
 
 	hfp_audio_agent_destroy(conn);
 
