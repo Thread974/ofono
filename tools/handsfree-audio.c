@@ -65,6 +65,7 @@ static gboolean option_nocvsd = FALSE;
 static gboolean option_nomsbc = FALSE;
 static gboolean option_server = FALSE;
 static gboolean option_defer = FALSE;
+static gboolean option_kill = FALSE;
 static gchar *option_client_addr = NULL;
 
 static const char sntable[4] = { 0x08, 0x38, 0xC8, 0xF8 };
@@ -534,6 +535,9 @@ static int new_connection(int fd, int codec)
 	struct hfp_thread *thread;
 
 	DBG("New connection: fd=%d codec=%d", fd, codec);
+	if (option_kill)
+		return -ECANCELED;
+
 	thread = g_try_malloc0(sizeof(struct hfp_thread));
 	if (thread == NULL)
 		return -ENOMEM;
@@ -869,6 +873,8 @@ static GOptionEntry options[] = {
 				"Server" },
 	{ "client", 'C', 1, G_OPTION_ARG_STRING, &option_client_addr,
 				"Client addr" },
+	{ "kill", 'k', 0, G_OPTION_ARG_NONE, &option_kill,
+				"Kill all new connections" },
 	{ NULL },
 };
 
