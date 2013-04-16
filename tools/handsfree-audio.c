@@ -32,12 +32,15 @@
 #include <string.h>
 #include <signal.h>
 #include <sys/socket.h>
+#include <sys/time.h>
+#include <poll.h>
 
 #include <gdbus.h>
 #include <glib.h>
 #include <pthread.h>
 
 #include "bluetooth.h"
+#include <alsa/asoundlib.h>
 
 #define OFONO_SERVICE			"org.ofono"
 #define HFP_AUDIO_MANAGER_PATH		"/"
@@ -70,6 +73,28 @@ struct hfp_thread {
 	pthread_t thread;
 };
 
+static snd_pcm_t *hfp_audio_pcm_init(snd_pcm_stream_t stream)
+{
+	snd_pcm_t *pcm;
+	DBG("Initializing pcm for %s", (stream == SND_PCM_STREAM_CAPTURE) ?
+							"capture" : "playback");
+
+	if (snd_pcm_open(&pcm, "default", stream, SND_PCM_NONBLOCK) < 0) {
+		DBG("Failed to open pcm");
+		return NULL;
+	}
+
+	/* 16 bits */
+	if (snd_pcm_set_params(pcm, SND_PCM_FORMAT_S16_LE,
+			SND_PCM_ACCESS_RW_INTERLEAVED, 1, 8000, 1, 120000) < 0) {
+		DBG("Failed to set pcm params");
+		snd_pcm_close(pcm);
+		pcm = NULL;
+	}
+
+	return pcm;
+}
+
 static void hfp_audio_thread_free(struct hfp_thread *thread)
 {
 	DBG("Freeing audio connection %p", thread);
@@ -91,18 +116,158 @@ static void hfp_audio_thread_free(struct hfp_thread *thread)
 	DBG("freed %p", thread);
 }
 
+/* Returns the number of data on sco socket */
+static int hfp_audio_playback(int fd, snd_pcm_t *playback)
+{
+	char buf[800];
+	snd_pcm_sframes_t frames;
+	int bytes;
+
+	bytes = read(fd, buf, sizeof(buf));
+	if (bytes < 0) {
+		DBG("Failed to read: bytes %d, errno %d", bytes, errno);
+		switch (errno) {
+		case ENOTCONN:
+			return -ENOTCONN;
+		case EAGAIN:
+			return 0;
+		default:
+			return -EINVAL;
+		}
+	}
+
+	frames = snd_pcm_writei(playback, buf, bytes / 2);
+	switch (frames) {
+	case -EPIPE:
+		snd_pcm_prepare(playback);
+		return bytes;
+	case -EAGAIN:
+		return bytes;
+	case -EBADFD:
+	case -ESTRPIPE:
+		return -EINVAL;
+	}
+
+	if (frames < bytes / 2)
+		DBG("played %d < requested %d", (int)frames, bytes / 2);
+
+	return bytes;
+}
+
+/* Returns the number of data on sco socket */
+static int hfp_audio_capture(int fd, snd_pcm_t *capture, GList **outq, int mtu)
+{
+	snd_pcm_sframes_t frames;
+	gchar *buf;
+
+	buf = g_try_malloc(mtu);
+	if (!buf)
+		return -ENOMEM;
+
+	frames = snd_pcm_readi(capture, buf, mtu / 2);
+	switch (frames) {
+	case -EPIPE:
+		DBG("Capture overrun");
+		snd_pcm_prepare(capture);
+		g_free(buf);
+		return 0;
+	case -EAGAIN:
+		DBG("No data to capture");
+		g_free(buf);
+		return 0;
+	case -EBADFD:
+	case -ESTRPIPE:
+		DBG("Other error");
+		g_free(buf);
+		return -EINVAL;
+	}
+
+	if (frames < mtu / 2)
+		DBG("Small frame: %d", (int) frames);
+
+	if (g_list_length(*outq) > 32)
+		DBG("Too many queued packets");
+
+	*outq = g_list_append(*outq, buf);
+
+	return frames * 2;
+}
+
+static void pop_outq(int fd, GList **outq, int mtu)
+{
+	GList *el;
+
+	el = g_list_first(*outq);
+	if (!el)
+		return;
+
+	*outq = g_list_remove_link(*outq, el);
+
+	if (write(fd, el->data, mtu) < 0)
+		DBG("Failed to write: %d", errno);
+
+	g_free(el->data);
+	g_list_free(el);
+}
+
 static void *thread_func(void *userdata)
 {
 	struct hfp_thread *thread = userdata;
+	snd_pcm_t *playback, *capture;
+	GList *outq = NULL;
+	struct pollfd fds[8];
+	int mtu = 48;
+
+	DBG("thread started");
+
+	capture = hfp_audio_pcm_init(SND_PCM_STREAM_CAPTURE);
+	if (!capture)
+		return NULL;
+
+	playback = hfp_audio_pcm_init(SND_PCM_STREAM_PLAYBACK);
+	if (!playback) {
+		snd_pcm_close(capture);
+		return NULL;
+	}
 
 	/* Force defered setup */
 	if (recv(thread->fd, NULL, 0, 0) < 0)
 		DBG("Defered setup failed: %d (%s)", errno, strerror(errno));
 
 	while (thread->running) {
+		/* Queue alsa captured data (snd_pcm_poll_descriptors failed) */
+		if (hfp_audio_capture(thread->fd, capture, &outq, mtu) < 0) {
+			DBG("Failed to capture");
+			break;
+		}
 
+		memset(fds, 0, sizeof(fds));
+		fds[0].fd = thread->fd;
+		fds[0].events = POLLIN | POLLERR | POLLHUP | POLLNVAL;
+		if (poll(fds, 1, 200) == 0)
+			continue;
+
+		if (fds[0].revents & (POLLERR | POLLHUP | POLLNVAL)) {
+			DBG("POLLERR | POLLHUP | POLLNVAL triggered (%d)",
+					fds[0].revents);
+			break;
+		}
+
+		if (!fds[0].revents & POLLIN)
+			continue;
+
+		if (hfp_audio_playback(thread->fd, playback) < 0) {
+			DBG("POLLIN triggered, but read error");
+			break;
+		}
+
+		/* Dequeue in sync with readings */
+		pop_outq(thread->fd, &outq, mtu);
 	}
 
+	DBG("thread terminating");
+	snd_pcm_close(playback);
+	snd_pcm_close(capture);
 	return NULL;
 }
 
