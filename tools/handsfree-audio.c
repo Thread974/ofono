@@ -48,6 +48,7 @@
 #define HFP_AUDIO_MANAGER_INTERFACE	OFONO_SERVICE ".HandsfreeAudioManager"
 #define HFP_AUDIO_AGENT_PATH		"/hfpaudioagent"
 #define HFP_AUDIO_AGENT_INTERFACE	OFONO_SERVICE ".HandsfreeAudioAgent"
+#define HFP_AUDIO_CARD_INTERFACE	OFONO_SERVICE ".HandsfreeAudioCard"
 
 #define HFP_AUDIO_CVSD			1
 #define HFP_AUDIO_MSBC			2
@@ -70,6 +71,8 @@ static gchar *option_client_addr = NULL;
 
 static const char sntable[4] = { 0x08, 0x38, 0xC8, 0xF8 };
 static const int audio_rates[3] = { 0, 8000, 16000 };
+
+char *card_path;
 
 struct msbc_parser {
 	int len;
@@ -862,6 +865,68 @@ static void sig_term(int sig)
 	g_main_loop_quit(main_loop);
 }
 
+static void sig_user(int sig)
+{
+	DBusMessage *msg;
+
+	if (sig == SIGUSR1) {
+		if (!card_path) {
+			DBG("No audio card");
+			return;
+		}
+
+		DBG("Request audio connection");
+
+		msg = dbus_message_new_method_call(OFONO_SERVICE, card_path,
+					HFP_AUDIO_CARD_INTERFACE, "Connect");
+		if (msg == NULL) {
+			DBG("Not enough memory");
+			return;
+		}
+
+		g_dbus_send_message(conn, msg);
+	}
+}
+
+static gboolean card_added(DBusConnection *connection, DBusMessage *message,
+			void *user_data)
+{
+	DBusMessageIter iter;
+	const char *path;
+
+	dbus_message_iter_init(message, &iter);
+
+	if (dbus_message_iter_get_arg_type(&iter) != DBUS_TYPE_OBJECT_PATH)
+		return FALSE;
+
+	dbus_message_iter_get_basic(&iter, &path);
+	DBG("%s", path);
+
+	card_path = g_strdup(path);
+
+	return TRUE;
+}
+
+static gboolean card_removed(DBusConnection *connection, DBusMessage *message,
+			void *user_data)
+{
+	DBusMessageIter iter;
+	const char *path;
+
+	dbus_message_iter_init(message, &iter);
+
+	if (dbus_message_iter_get_arg_type(&iter) != DBUS_TYPE_OBJECT_PATH)
+		return FALSE;
+
+	dbus_message_iter_get_basic(&iter, &path);
+	DBG("%s", path);
+
+	g_free(card_path);
+	card_path = NULL;
+
+	return TRUE;
+}
+
 static GOptionEntry options[] = {
 	{ "nocvsd", 'c', 0, G_OPTION_ARG_NONE, &option_nocvsd,
 				"Disable CVSD support" },
@@ -884,7 +949,10 @@ int main(int argc, char **argv)
 	GError *error = NULL;
 	DBusError err;
 	guint watch;
+	guint add_card_watch = 0;
+	guint remove_card_watch = 0;
 	struct sigaction sa;
+	struct sigaction sa_user;
 
 	context = g_option_context_new(NULL);
 	g_option_context_add_main_entries(context, options, NULL);
@@ -914,6 +982,10 @@ int main(int argc, char **argv)
 	sigaction(SIGINT, &sa, NULL);
 	sigaction(SIGTERM, &sa, NULL);
 
+	memset(&sa_user, 0, sizeof(sa_user));
+	sa_user.sa_handler = sig_user;
+	sigaction(SIGUSR1, &sa_user, NULL);
+
 	conn = g_dbus_setup_bus(DBUS_BUS_SYSTEM, NULL, &err);
 	if (conn == NULL) {
 		if (dbus_error_is_set(&err) == TRUE) {
@@ -934,6 +1006,16 @@ int main(int argc, char **argv)
 		hfp_audio_agent_create(conn);
 		watch = g_dbus_add_service_watch(conn, OFONO_SERVICE,
 				ofono_connect, ofono_disconnect, NULL, NULL);
+		add_card_watch = g_dbus_add_signal_watch(conn, OFONO_SERVICE,
+						HFP_AUDIO_MANAGER_PATH,
+						HFP_AUDIO_MANAGER_INTERFACE,
+						"CardAdded", card_added,
+						NULL, NULL);
+		remove_card_watch = g_dbus_add_signal_watch(conn, OFONO_SERVICE,
+						HFP_AUDIO_MANAGER_PATH,
+						HFP_AUDIO_MANAGER_INTERFACE,
+						"CardRemoved", card_removed,
+						NULL, NULL);
 	}
 	g_main_loop_run(main_loop);
 
@@ -946,6 +1028,8 @@ int main(int argc, char **argv)
 		g_source_remove(watch);
 	} else {
 		g_dbus_remove_watch(conn, watch);
+		g_dbus_remove_watch(conn, add_card_watch);
+		g_dbus_remove_watch(conn, remove_card_watch);
 		hfp_audio_agent_destroy(conn);
 	}
 
