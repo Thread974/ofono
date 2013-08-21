@@ -41,6 +41,7 @@
 
 #include "bluetooth.h"
 #include <alsa/asoundlib.h>
+#include <sbc/sbc.h>
 
 #define OFONO_SERVICE			"org.ofono"
 #define HFP_AUDIO_MANAGER_PATH		"/"
@@ -66,14 +67,260 @@ static gboolean option_server = FALSE;
 static gboolean option_defer = FALSE;
 static gchar *option_client_addr = NULL;
 
+static const char sntable[4] = { 0x08, 0x38, 0xC8, 0xF8 };
+static const int audio_rates[3] = { 0, 8000, 16000 };
+
+struct msbc_parser {
+	int len;
+	uint8_t buffer[60];
+};
+
+struct msbc_codec {
+	sbc_t sbcenc; /* Coder data */
+	char *ebuffer; /* Codec transfer buffer */
+	size_t ebuffer_size; /* Size of the buffer */
+	size_t ebuffer_start; /* start of encoding data */
+	size_t ebuffer_end; /* end of encoding data */
+
+	struct msbc_parser parser; /* mSBC parser for concatenating frames */
+	sbc_t sbcdec; /* Decoder data */
+
+	size_t msbc_frame_size;
+	size_t decoded_frame_size;
+};
+
 struct hfp_thread {
-	unsigned char codec;
 	int fd;
 	int running;
 	pthread_t thread;
+	GSList *outq;
+
+	int rate;
+	char *capture_buffer;
+	int capture_size;
+	int captured;
+	int mtu;
+	int (*init)(struct hfp_thread *);
+	int (*free)(struct hfp_thread *);
+	int (*encode)(struct hfp_thread *, char *data, int len);
+	int (*decode)(struct hfp_thread *, char *data, int len, char *out,
+								int outlen);
+	struct msbc_codec msbc;
 };
 
-static snd_pcm_t *hfp_audio_pcm_init(snd_pcm_stream_t stream)
+static void msbc_parser_reset(struct msbc_parser *p)
+{
+	p->len = 0;
+}
+
+static int msbc_state_machine(struct msbc_parser *p, uint8_t byte)
+{
+	switch (p->len) {
+	case 0:
+		if (byte == 0x01)
+			goto copy;
+		return 0;
+	case 1:
+		if (byte == 0x08 || byte == 0x38 || byte == 0xC8
+				|| byte == 0xF8)
+			goto copy;
+		break;
+	case 2:
+		if (byte == 0xAD)
+			goto copy;
+		break;
+	case 3:
+		if (byte == 0x00)
+			goto copy;
+		break;
+	case 4:
+		if (byte == 0x00)
+			goto copy;
+		break;
+	default:
+		goto copy;
+	}
+
+	p->len = 0;
+	return 0;
+
+copy:
+	p->buffer[p->len] = byte;
+	p->len++;
+
+	return p->len;
+}
+
+static size_t msbc_parse(sbc_t *sbcdec, struct msbc_parser *p, char *data,
+		int len, char *out, int outlen, int *bytes)
+{
+	size_t totalwritten = 0;
+	size_t written = 0;
+	int i;
+	*bytes = 0;
+
+	for (i = 0; i < len; i++) {
+		if (msbc_state_machine(p, data[i]) == 60) {
+			int decoded;
+			decoded = sbc_decode(sbcdec, p->buffer + 2,
+					p->len - 2 - 1, out, outlen, &written);
+			if (decoded > 0) {
+				totalwritten += written;
+				*bytes += decoded;
+			} else {
+				DBG("Error while decoding: %d", decoded);
+			}
+			msbc_parser_reset(p);
+		}
+	}
+	return totalwritten;
+}
+
+static int hfp_audio_cvsd_init(struct hfp_thread *thread)
+{
+	thread->rate = 8000;
+	thread->capture_size = 48;
+	return 0;
+}
+
+static int hfp_audio_cvsd_free(struct hfp_thread *thread)
+{
+	return 0;
+}
+
+static int hfp_audio_cvsd_encode(struct hfp_thread *thread, char *data,
+						int len)
+{
+	char *qbuf;
+
+	if (len > thread->mtu) {
+		DBG("Mtu too small: len %d, mtu %d", len, thread->mtu);
+		return -EINVAL;
+	}
+
+	qbuf = g_try_malloc(thread->mtu);
+	if (!qbuf)
+		return -ENOMEM;
+
+	memcpy(qbuf, data, len);
+
+	thread->outq = g_slist_insert(thread->outq, qbuf, -1);
+
+	return len;
+}
+
+static int hfp_audio_cvsd_decode(struct hfp_thread *thread, char *data,
+						int len, char *out, int outlen)
+{
+	int size = (len < outlen) ? len : outlen;
+	memcpy(out, data, size);
+	return size;
+}
+
+/* Run from IO thread */
+static int hfp_audio_msbc_init(struct hfp_thread *thread)
+{
+	struct msbc_codec *codec = &thread->msbc;
+	struct bt_voice voice;
+
+	thread->rate = 16000;
+	thread->capture_size = 240; /* decoded mSBC frame */
+
+	memset(&voice, 0, sizeof(voice));
+	voice.setting = BT_VOICE_TRANSPARENT;
+	if (setsockopt(thread->fd, SOL_BLUETOOTH, BT_VOICE, &voice, sizeof(voice))
+			< 0) {
+		DBG("Can't set transparent mode: %s (%d)",
+				strerror(errno), errno);
+		return -ENOTSUP;
+	}
+
+	sbc_init_msbc(&codec->sbcenc, 0);
+	sbc_init_msbc(&codec->sbcdec, 0);
+
+	codec->msbc_frame_size = 2 + sbc_get_frame_length(&codec->sbcenc) + 1;
+	codec->decoded_frame_size = sbc_get_codesize(&codec->sbcenc);
+	msbc_parser_reset(&codec->parser);
+
+	/* 5 * 48 == 10 * 24 == 4 * 60 */
+	codec->ebuffer_size = codec->msbc_frame_size * 4;
+	codec->ebuffer = g_try_malloc(codec->ebuffer_size);
+	codec->ebuffer_start = 0;
+	codec->ebuffer_end = 0;
+
+	DBG("codec->msbc_frame_size %d", (int) codec->msbc_frame_size);
+	DBG("codec->ebuffer_size %d", (int) codec->ebuffer_size);
+	DBG("codec->decoded_frame_size %d", (int) codec->decoded_frame_size);
+	return 0;
+}
+
+/* Run from IO thread */
+static int hfp_audio_msbc_free(struct hfp_thread *thread)
+{
+	struct msbc_codec *codec = &thread->msbc;
+
+	g_free(codec->ebuffer);
+	sbc_finish(&codec->sbcenc);
+	sbc_finish(&codec->sbcdec);
+
+	return 0;
+}
+
+/* Run from IO thread */
+static int hfp_audio_msbc_encode(struct hfp_thread *thread, char *data, int len)
+{
+	struct msbc_codec *codec = &thread->msbc;
+	char *h2 = codec->ebuffer + codec->ebuffer_end;
+	static int sn = 0;
+	int written = 0;
+	char *qbuf;
+
+	h2[0] = 0x01;
+	h2[1] = sntable[sn];
+	h2[59] = 0xff;
+	sn = (sn + 1) % 4;
+
+	sbc_encode(&codec->sbcenc, data, len,
+			codec->ebuffer + codec->ebuffer_end + 2,
+			codec->ebuffer_size - codec->ebuffer_end - 2,
+			(ssize_t *) &written);
+
+	written += 2 /* H2 */ + 1 /* 0xff */;
+	codec->ebuffer_end += written;
+
+	/* Split into MTU sized chunks */
+	while (codec->ebuffer_start + thread->mtu <= codec->ebuffer_end) {
+		qbuf = g_try_malloc(thread->mtu);
+		if (!qbuf)
+			return -ENOMEM;
+
+		/* DBG("Enqueuing %d bytes", thread->mtu); */
+		memcpy(qbuf, codec->ebuffer + codec->ebuffer_start, thread->mtu);
+
+		thread->outq = g_slist_insert(thread->outq, qbuf, -1);
+
+		codec->ebuffer_start += thread->mtu;
+		if (codec->ebuffer_start >= codec->ebuffer_end)
+			codec->ebuffer_start = codec->ebuffer_end = 0;
+	}
+
+	return 0;
+}
+
+/* Run from IO thread */
+static int hfp_audio_msbc_decode(struct hfp_thread *thread, char *data,
+						int len, char *out, int outlen)
+{
+	struct msbc_codec *codec = &thread->msbc;
+	int written, decoded;
+
+	written = msbc_parse(&codec->sbcdec, &codec->parser, data, len, out,
+			outlen, &decoded);
+
+	return written;
+}
+
+static snd_pcm_t *hfp_audio_pcm_init(snd_pcm_stream_t stream, int rate)
 {
 	snd_pcm_t *pcm;
 	DBG("Initializing pcm for %s", (stream == SND_PCM_STREAM_CAPTURE) ?
@@ -86,7 +333,7 @@ static snd_pcm_t *hfp_audio_pcm_init(snd_pcm_stream_t stream)
 
 	/* 16 bits */
 	if (snd_pcm_set_params(pcm, SND_PCM_FORMAT_S16_LE,
-			SND_PCM_ACCESS_RW_INTERLEAVED, 1, 8000, 1, 120000) < 0) {
+			SND_PCM_ACCESS_RW_INTERLEAVED, 1, rate, 1, 120000) < 0) {
 		DBG("Failed to set pcm params");
 		snd_pcm_close(pcm);
 		pcm = NULL;
@@ -117,13 +364,14 @@ static void hfp_audio_thread_free(struct hfp_thread *thread)
 }
 
 /* Returns the number of data on sco socket */
-static int hfp_audio_playback(int fd, snd_pcm_t *playback)
+static int hfp_audio_playback(struct hfp_thread *thread,
+		snd_pcm_t *playback)
 {
-	char buf[800];
+	char buf[512], out[512];
+	int bytes, outlen;
 	snd_pcm_sframes_t frames;
-	int bytes;
 
-	bytes = read(fd, buf, sizeof(buf));
+	bytes = read(thread->fd, buf, sizeof(buf));
 	if (bytes < 0) {
 		DBG("Failed to read: bytes %d, errno %d", bytes, errno);
 		switch (errno) {
@@ -136,7 +384,10 @@ static int hfp_audio_playback(int fd, snd_pcm_t *playback)
 		}
 	}
 
-	frames = snd_pcm_writei(playback, buf, bytes / 2);
+	/* DBG("received %d bytes", bytes); */
+	outlen = thread->decode(thread, buf, bytes, out, sizeof(out));
+
+	frames = snd_pcm_writei(playback, out, outlen / 2);
 	switch (frames) {
 	case -EPIPE:
 		snd_pcm_prepare(playback);
@@ -148,85 +399,82 @@ static int hfp_audio_playback(int fd, snd_pcm_t *playback)
 		return -EINVAL;
 	}
 
-	if (frames < bytes / 2)
-		DBG("played %d < requested %d", (int)frames, bytes / 2);
+	if (frames < outlen / 2)
+		DBG("played %d < requested %d", (int)frames, outlen / 2);
 
 	return bytes;
 }
 
 /* Returns the number of data on sco socket */
-static int hfp_audio_capture(int fd, snd_pcm_t *capture, GList **outq, int mtu)
+static int hfp_audio_capture(struct hfp_thread *thread, snd_pcm_t *capture)
 {
 	snd_pcm_sframes_t frames;
-	gchar *buf;
 
-	buf = g_try_malloc(mtu);
-	if (!buf)
-		return -ENOMEM;
-
-	frames = snd_pcm_readi(capture, buf, mtu / 2);
+	frames = snd_pcm_readi(capture, thread->capture_buffer+thread->captured,
+				(thread->capture_size - thread->captured) / 2);
 	switch (frames) {
 	case -EPIPE:
-		DBG("Capture overrun");
 		snd_pcm_prepare(capture);
-		g_free(buf);
 		return 0;
 	case -EAGAIN:
-		DBG("No data to capture");
-		g_free(buf);
 		return 0;
 	case -EBADFD:
 	case -ESTRPIPE:
-		DBG("Other error");
-		g_free(buf);
+		DBG("Other error %s (%d)", strerror(frames), (int) frames);
 		return -EINVAL;
 	}
 
-	if (frames < mtu / 2)
-		DBG("Small frame: %d", (int) frames);
+	thread->captured += frames * 2;
+	if (thread->captured < thread->capture_size)
+		return frames * 2;
 
-	if (g_list_length(*outq) > 32)
-		DBG("Too many queued packets");
-
-	*outq = g_list_append(*outq, buf);
+	/* DBG("Encoding %d bytes", (int) thread->captured); */
+	thread->encode(thread, thread->capture_buffer, thread->captured);
+	thread->captured = 0;
 
 	return frames * 2;
 }
 
-static void pop_outq(int fd, GList **outq, int mtu)
+static void pop_outq(struct hfp_thread *thread)
 {
-	GList *el;
+	char *qbuf;
 
-	el = g_list_first(*outq);
-	if (!el)
-		return;
+	while (thread->outq != NULL) {
+		qbuf = thread->outq->data;
+		thread->outq = g_slist_remove(thread->outq, qbuf);
 
-	*outq = g_list_remove_link(*outq, el);
+		if (write(thread->fd, qbuf, thread->mtu) < 0)
+			DBG("Failed to write: %d", errno);
 
-	if (write(fd, el->data, mtu) < 0)
-		DBG("Failed to write: %d", errno);
-
-	g_free(el->data);
-	g_list_free(el);
+		g_free(qbuf);
+	}
 }
 
 static void *thread_func(void *userdata)
 {
 	struct hfp_thread *thread = userdata;
 	snd_pcm_t *playback, *capture;
-	GList *outq = NULL;
 	struct pollfd fds[8];
-	int mtu = 48;
 
-	DBG("thread started");
+	DBG("thread started: rate %d", thread->rate);
 
-	capture = hfp_audio_pcm_init(SND_PCM_STREAM_CAPTURE);
+	if (thread->init(thread) < 0)
+		return NULL;
+
+	capture = hfp_audio_pcm_init(SND_PCM_STREAM_CAPTURE, thread->rate);
 	if (!capture)
 		return NULL;
 
-	playback = hfp_audio_pcm_init(SND_PCM_STREAM_PLAYBACK);
+	playback = hfp_audio_pcm_init(SND_PCM_STREAM_PLAYBACK, thread->rate);
 	if (!playback) {
 		snd_pcm_close(capture);
+		return NULL;
+	}
+
+	thread->capture_buffer = g_try_malloc(thread->capture_size);
+	if (!thread->capture_buffer) {
+		snd_pcm_close(capture);
+		snd_pcm_close(playback);
 		return NULL;
 	}
 
@@ -234,9 +482,12 @@ static void *thread_func(void *userdata)
 	if (recv(thread->fd, NULL, 0, 0) < 0)
 		DBG("Defered setup failed: %d (%s)", errno, strerror(errno));
 
+	thread->mtu = 48;
+	DBG("thread->mtu %d", thread->mtu);
+
 	while (thread->running) {
 		/* Queue alsa captured data (snd_pcm_poll_descriptors failed) */
-		if (hfp_audio_capture(thread->fd, capture, &outq, mtu) < 0) {
+		if (hfp_audio_capture(thread, capture) < 0) {
 			DBG("Failed to capture");
 			break;
 		}
@@ -256,18 +507,25 @@ static void *thread_func(void *userdata)
 		if (!fds[0].revents & POLLIN)
 			continue;
 
-		if (hfp_audio_playback(thread->fd, playback) < 0) {
+		if (hfp_audio_playback(thread, playback) < 0) {
 			DBG("POLLIN triggered, but read error");
 			break;
 		}
 
+		/* DBG("Received and send"); */
+
 		/* Dequeue in sync with readings */
-		pop_outq(thread->fd, &outq, mtu);
+		pop_outq(thread);
 	}
 
 	DBG("thread terminating");
+	g_slist_free_full(thread->outq, g_free);
+	g_free(thread->capture_buffer);
 	snd_pcm_close(playback);
 	snd_pcm_close(capture);
+
+	thread->free(thread);
+
 	return NULL;
 }
 
@@ -282,7 +540,22 @@ static int new_connection(int fd, int codec)
 
 	thread->fd = fd;
 	thread->running = 1;
-	thread->codec = codec;
+
+	switch (codec) {
+	case HFP_AUDIO_CVSD:
+		thread->init = hfp_audio_cvsd_init;
+		thread->free = hfp_audio_cvsd_free;
+		thread->decode = hfp_audio_cvsd_decode;
+		thread->encode = hfp_audio_cvsd_encode;
+		break;
+	case HFP_AUDIO_MSBC:
+		thread->rate = 16000;
+		thread->init = hfp_audio_msbc_init;
+		thread->free = hfp_audio_msbc_free;
+		thread->decode = hfp_audio_msbc_decode;
+		thread->encode = hfp_audio_msbc_encode;
+		break;
+	}
 
 	if (pthread_create(&thread->thread, NULL, thread_func, thread) < 0) {
 		hfp_audio_thread_free(thread);
