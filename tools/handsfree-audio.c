@@ -28,6 +28,7 @@
 #include <fcntl.h>
 #include <unistd.h>
 #include <stdlib.h>
+#include <stdint.h>
 #include <string.h>
 #include <signal.h>
 #include <sys/socket.h>
@@ -35,6 +36,8 @@
 #include <gdbus.h>
 #include <glib.h>
 #include <pthread.h>
+
+#include "bluetooth.h"
 
 #define OFONO_SERVICE			"org.ofono"
 #define HFP_AUDIO_MANAGER_PATH		"/"
@@ -56,6 +59,9 @@ static GSList *threads = NULL;
 
 static gboolean option_nocvsd = FALSE;
 static gboolean option_nomsbc = FALSE;
+static gboolean option_server = FALSE;
+static gboolean option_defer = FALSE;
+static gchar *option_client_addr = NULL;
 
 struct hfp_thread {
 	unsigned char codec;
@@ -234,6 +240,140 @@ static void hfp_audio_agent_register(DBusConnection *conn)
 	dbus_pending_call_unref(call);
 }
 
+static gboolean sco_accept_cb(GIOChannel *io, GIOCondition cond, gpointer data)
+{
+	struct sockaddr_sco addr;
+	socklen_t optlen;
+	int sk, nsk;
+
+	if (cond & (G_IO_HUP | G_IO_NVAL | G_IO_ERR))
+		goto fail;
+
+	DBG("Incoming connection");
+	sk = g_io_channel_unix_get_fd(io);
+	nsk = accept(sk, (struct sockaddr *) &addr, &optlen);
+
+	if (nsk > 0)
+		new_connection(nsk, HFP_AUDIO_CVSD);
+
+	return TRUE;
+
+fail:
+	DBG("Server disconnected");
+	return FALSE;
+}
+
+static gboolean sco_connect_cb(GIOChannel *io, GIOCondition cond, gpointer data)
+{
+	int sk;
+
+	if (cond & (G_IO_HUP | G_IO_NVAL | G_IO_ERR))
+		goto fail;
+
+	DBG("Connected");
+	sk = g_io_channel_unix_get_fd(io);
+	if (sk > 0)
+		new_connection(sk, HFP_AUDIO_CVSD);
+
+	return FALSE;
+
+fail:
+	DBG("Connection failed");
+	return FALSE;
+}
+
+static int sco_listen_watch()
+{
+	struct sockaddr_sco saddr;
+	int sk;
+	GIOChannel *io;
+
+	/* Create socket */
+	sk = socket(PF_BLUETOOTH, SOCK_SEQPACKET, BTPROTO_SCO);
+	if (sk < 0) {
+		DBG("Can't create socket: %s (%d)", strerror(errno), errno);
+		return -1;
+	}
+
+	/* Bind to local address */
+	memset(&saddr, 0, sizeof(saddr));
+	saddr.sco_family = AF_BLUETOOTH;
+
+	if (bind(sk, (struct sockaddr *) &saddr, sizeof(saddr)) < 0) {
+		DBG("Can't bind socket: %s (%d)", strerror(errno), errno);
+		goto fail;
+	}
+
+	/* Enable deferred setup */
+	if (option_defer
+			&& setsockopt(sk, SOL_BLUETOOTH, BT_DEFER_SETUP,
+					&option_defer, sizeof(option_defer))
+					< 0) {
+		DBG("Can't defer setup : %s (%d)", strerror(errno), errno);
+		goto fail;
+	}
+
+	/* Listen for connections */
+	if (listen(sk, 10)) {
+		DBG("Can not listen socket: %s (%d)", strerror(errno), errno);
+		goto fail;
+	}
+
+	DBG("Waiting for connection ...");
+	io = g_io_channel_unix_new(sk);
+	if (!io)
+		goto fail;
+
+	return g_io_add_watch(io, G_IO_IN, sco_accept_cb, NULL);
+
+fail:
+	close(sk);
+	return -1;
+}
+
+static int sco_connect_watch()
+{
+	struct sockaddr_sco saddr;
+	int sk;
+	GIOChannel *io;
+
+	/* Create socket */
+	sk = socket(PF_BLUETOOTH, SOCK_SEQPACKET, BTPROTO_SCO);
+	if (sk < 0) {
+		DBG("Can't create socket: %s (%d)", strerror(errno), errno);
+		return -1;
+	}
+
+	/* Bind to local address */
+	memset(&saddr, 0, sizeof(saddr));
+	saddr.sco_family = AF_BLUETOOTH;
+
+	if (bind(sk, (struct sockaddr *) &saddr, sizeof(saddr)) < 0) {
+		DBG("Can't bind socket: %s (%d)", strerror(errno), errno);
+		goto fail;
+	}
+
+	/* Connect to remote address */
+	memset(&saddr, 0, sizeof(saddr));
+	saddr.sco_family = AF_BLUETOOTH;
+	bt_str2ba(option_client_addr, &saddr.sco_bdaddr);
+	if (connect(sk, (struct sockaddr *) &saddr, sizeof(saddr))) {
+		DBG("Can not connect socket: %s (%d)", strerror(errno), errno);
+		goto fail;
+	}
+
+	DBG("Connecting to %s...", option_client_addr);
+	io = g_io_channel_unix_new(sk);
+	if (!io)
+		goto fail;
+
+	return g_io_add_watch(io, G_IO_IN | G_IO_OUT, sco_connect_cb, NULL);
+
+fail:
+	close(sk);
+	return -1;
+}
+
 static void hfp_audio_agent_create(DBusConnection *conn)
 {
 	DBG("Registering audio agent on DBUS");
@@ -285,6 +425,12 @@ static GOptionEntry options[] = {
 				"Disable CVSD support" },
 	{ "nomsbc", 'm', 0, G_OPTION_ARG_NONE, &option_nomsbc,
 				"Disable MSBC support" },
+	{ "defer", 'd', 0, G_OPTION_ARG_NONE, &option_defer,
+				"Defered socket support" },
+	{ "server", 'S', 0, G_OPTION_ARG_NONE, &option_server,
+				"Server" },
+	{ "client", 'C', 1, G_OPTION_ARG_STRING, &option_client_addr,
+				"Client addr" },
 	{ NULL },
 };
 
@@ -336,18 +482,28 @@ int main(int argc, char **argv)
 
 	g_dbus_set_disconnect_function(conn, disconnect_callback, NULL, NULL);
 
-	hfp_audio_agent_create(conn);
-
-	watch = g_dbus_add_service_watch(conn, OFONO_SERVICE,
+	if (option_server) {
+		watch = sco_listen_watch();
+	} else if (option_client_addr != NULL) {
+		watch = sco_connect_watch();
+	} else {
+		hfp_audio_agent_create(conn);
+		watch = g_dbus_add_service_watch(conn, OFONO_SERVICE,
 				ofono_connect, ofono_disconnect, NULL, NULL);
-
+	}
 	g_main_loop_run(main_loop);
 
 	while (threads != NULL)
 		hfp_audio_thread_free(threads->data);
 
-	g_dbus_remove_watch(conn, watch);
-	hfp_audio_agent_destroy(conn);
+	if (option_server) {
+		g_source_remove(watch);
+	} else if (option_client_addr != NULL) {
+		g_source_remove(watch);
+	} else {
+		g_dbus_remove_watch(conn, watch);
+		hfp_audio_agent_destroy(conn);
+	}
 
 	dbus_connection_unref(conn);
 
