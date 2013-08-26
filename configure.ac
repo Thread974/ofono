@@ -126,6 +126,11 @@ if (test "${enable_tools}" = "yes"); then
 				AC_MSG_ERROR(Alsa library is required))
 	AC_SUBST(ALSA_CFLAGS)
 	AC_SUBST(ALSA_LIBS)
+
+	PKG_CHECK_MODULES(SBC, sbc >= 1.1, dummy=yes,
+				AC_MSG_ERROR(SBC library v. 1.1 is required))
+	AC_SUBST(SBC_CFLAGS)
+	AC_SUBST(SBC_LIBS)
 fi
 AM_CONDITIONAL(TOOLS, test "${enable_tools}" = "yes")
 
