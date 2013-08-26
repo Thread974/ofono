@@ -728,10 +728,15 @@ TESTS = $(unit_tests)
 if TOOLS
 noinst_PROGRAMS += tools/huawei-audio tools/auto-enable \
 			tools/get-location tools/lookup-apn \
-			tools/lookup-provider-name tools/tty-redirector
+			tools/lookup-provider-name tools/tty-redirector \
+			tools/handsfree-audio
 
 tools_huawei_audio_SOURCES = tools/huawei-audio.c
 tools_huawei_audio_LDADD = gdbus/libgdbus-internal.la @GLIB_LIBS@ @DBUS_LIBS@
+
+tools_handsfree_audio_SOURCES = tools/handsfree-audio.c
+tools_handsfree_audio_LDADD = gdbus/libgdbus-internal.la -lpthread \
+				@GLIB_LIBS@ @DBUS_LIBS@
 
 tools_auto_enable_SOURCES = tools/auto-enable.c
 tools_auto_enable_LDADD = gdbus/libgdbus-internal.la @GLIB_LIBS@ @DBUS_LIBS@
